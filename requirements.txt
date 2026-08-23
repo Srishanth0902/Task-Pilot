@@ -1,0 +1,13 @@
+# Week 1 essentials only. LangChain / LangGraph arrive in Week 2.
+
+# Google Calendar API client
+google-api-python-client==2.199.0
+
+# HTTP transport adapter used by the Google API client
+google-auth-httplib2==0.4.1
+
+# OAuth 2.0 "installed app" flow (browser consent + token caching)
+google-auth-oauthlib==1.4.0
+
+# Loads settings from a .env file
+python-dotenv==1.2.3
