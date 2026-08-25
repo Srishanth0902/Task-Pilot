@@ -49,9 +49,7 @@ authenticating once and reusing the client across many calls.
 weeks build toward — layer boundaries, the LangGraph state machine, the safety
 model for calendar mutations, and the migration path from the code above.
 
-```
-UI  ->  FastAPI  ->  LangGraph agent  ->  Tools  ->  Services  ->  CalendarPort  ->  Google Calendar
-```
+![Task-Pilot architecture: five layers from interface down to domain. Requests enter through Streamlit and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.](docs/architecture-diagram.png)
 
 The four decisions that shape everything else:
 

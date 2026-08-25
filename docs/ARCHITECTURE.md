@@ -4,6 +4,12 @@ Target architecture for the 6-week agentic calendar assistant. It describes the
 end state, the layer boundaries that get us there, and the week-by-week path
 from the Week 1 code that exists today.
 
+![Task-Pilot architecture: five layers from interface down to domain. Requests enter through Streamlit and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.](architecture-diagram.svg)
+
+The clay path is the write path. Everything else is a read or a proposal.
+Regenerate the figure with `python docs/diagram/generate.py` and
+`node docs/diagram/render.js`.
+
 Read this before adding a module. The value of the design is almost entirely in
 the boundaries — where each kind of logic is allowed to live, and what is
 forbidden to import what.
