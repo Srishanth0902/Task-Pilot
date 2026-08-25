@@ -18,7 +18,8 @@ creates real events. The reasoning layer (LangChain / LangGraph) comes next.
 | 2 | Full CRUD helpers (update, delete, reschedule, query) | Next |
 | 3 | LangGraph agent: natural language in, calendar operations out | Planned |
 | 4 | Multi-step reasoning ("reschedule all my tasks for tomorrow") | Planned |
-| 5 | Interface and polish | Planned |
+| 5 | FastAPI backend, Streamlit UI, test suite | Planned |
+| 6 | Evaluation harness, logging, deployment | Planned |
 
 ## Project structure
 
@@ -29,6 +30,8 @@ Task-Pilot/
 │   ├── config.py            # settings loaded from .env, with defaults
 │   ├── calendar_service.py  # the only module that talks to Google Calendar
 │   └── main.py              # Week 1 smoke test
+├── docs/
+│   └── ARCHITECTURE.md      # target architecture for weeks 2-6
 ├── requirements.txt
 ├── .env.example             # copy to .env
 ├── .gitignore
@@ -39,6 +42,29 @@ Task-Pilot/
 API. Its functions take an authenticated `service` object as their first
 argument, so the agent added in a later week can wrap them as tools directly,
 authenticating once and reusing the client across many calls.
+
+## Architecture
+
+[**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) is the design the remaining
+weeks build toward — layer boundaries, the LangGraph state machine, the safety
+model for calendar mutations, and the migration path from the code above.
+
+```
+UI  ->  FastAPI  ->  LangGraph agent  ->  Tools  ->  Services  ->  CalendarPort  ->  Google Calendar
+```
+
+The four decisions that shape everything else:
+
+- **The calendar sits behind a port**, with an in-memory fake alongside the
+  Google adapter — so the agent, the API, and the Week 6 evaluations all run
+  offline, deterministically, against a seeded calendar.
+- **Nothing writes to a calendar directly.** Every change is first built as an
+  inert `MutationPlan` that can be previewed, confirmed, logged, and asserted
+  on. A single function executes one.
+- **The model classifies and phrases; it never computes.** Dates, overlaps, and
+  free-slot arithmetic are ordinary Python resolved against an injected clock.
+- **Business logic lives in services, not in tools.** Every capability stays
+  callable — and testable — with no LLM in the loop.
 
 ## Google Cloud setup
 
