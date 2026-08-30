@@ -4,9 +4,9 @@ This is the only module that knows about Google. Keeping it isolated means the
 LangGraph agent added in a later week can wrap these functions as tools without
 touching any API details.
 
-The read/write helpers take an authenticated ``service`` as their first
-argument instead of building one themselves, so a caller authenticates once and
-reuses it for many operations.
+The CRUD helpers take an authenticated ``service`` as their first argument
+instead of building one themselves, so a caller authenticates once and reuses
+it across many operations.
 """
 
 from datetime import datetime, timezone
@@ -15,6 +15,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from app.config import CALENDAR_ID, CREDENTIALS_FILE, SCOPES, TIMEZONE, TOKEN_FILE
 
@@ -60,6 +61,27 @@ def get_calendar_summary(service) -> str:
     return calendar.get("summary", CALENDAR_ID)
 
 
+def get_events(service, max_results=10):
+    """Return the next ``max_results`` events starting from now.
+
+    Recurring events are expanded into individual occurrences and the list is
+    ordered by start time, so the result reads like a real agenda.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    response = (
+        service.events()
+        .list(
+            calendarId=CALENDAR_ID,
+            timeMin=now,
+            maxResults=max_results,
+            singleEvents=True,
+            orderBy="startTime",
+        )
+        .execute()
+    )
+    return response.get("items", [])
+
+
 def create_event(service, summary, start, end, description=None, location=None):
     """Create a timed event and return the created event resource.
 
@@ -79,18 +101,58 @@ def create_event(service, summary, start, end, description=None, location=None):
     return service.events().insert(calendarId=CALENDAR_ID, body=body).execute()
 
 
-def list_upcoming_events(service, max_results=5):
-    """Return the next ``max_results`` events starting from now."""
-    now = datetime.now(timezone.utc).isoformat()
-    response = (
+def update_event(
+    service,
+    event_id,
+    summary=None,
+    start=None,
+    end=None,
+    description=None,
+    location=None,
+):
+    """Update selected fields of an existing event and return it.
+
+    Only the arguments you pass are changed — everything else on the event is
+    left alone. This uses ``patch`` rather than ``update`` precisely so callers
+    never have to send back a full event body just to move a start time.
+
+    Raises ``ValueError`` if no fields were given, which otherwise turns into a
+    confusing no-op API call.
+    """
+    body = {}
+    if summary is not None:
+        body["summary"] = summary
+    if start is not None:
+        body["start"] = {"dateTime": start.isoformat(), "timeZone": TIMEZONE}
+    if end is not None:
+        body["end"] = {"dateTime": end.isoformat(), "timeZone": TIMEZONE}
+    if description is not None:
+        body["description"] = description
+    if location is not None:
+        body["location"] = location
+
+    if not body:
+        raise ValueError("update_event() needs at least one field to change.")
+
+    return (
         service.events()
-        .list(
-            calendarId=CALENDAR_ID,
-            timeMin=now,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy="startTime",
-        )
+        .patch(calendarId=CALENDAR_ID, eventId=event_id, body=body)
         .execute()
     )
-    return response.get("items", [])
+
+
+def delete_event(service, event_id):
+    """Delete an event by id.
+
+    Returns True if the event was deleted, False if it was already gone.
+    Google returns 410 Gone for an event that no longer exists; treating that
+    as success keeps deletion idempotent, which matters once an agent may
+    retry a failed step.
+    """
+    try:
+        service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
+    except HttpError as error:
+        if error.resp.status in (404, 410):
+            return False
+        raise
+    return True

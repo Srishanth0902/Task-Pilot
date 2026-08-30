@@ -7,18 +7,29 @@ The goal is a conversational assistant you can talk to in plain English —
 *"Cancel my 3 PM task"* — that figures out which calendar operations are needed
 and carries them out for you, instead of making you click through a calendar UI.
 
-**Status: Week 1 complete.** The app authenticates with Google Calendar and
-creates real events. The reasoning layer (LangChain / LangGraph) comes next.
+**Status: Week 1 code complete.** The app authenticates with Google Calendar
+and can read, create, update and delete events. The reasoning layer (LangChain /
+LangGraph) comes next.
 
 ## Roadmap
 
 | Week | Goal | Status |
 |------|------|--------|
-| 1 | Project scaffold; connect to Google Calendar and create an event | Done |
-| 2 | Full CRUD helpers (update, delete, reschedule, query) | Next |
+| 1 | Project scaffold; full calendar CRUD against the real API | Code done |
+| 2 | LangChain tool definitions wrapping the calendar helpers | Next |
 | 3 | LangGraph agent: natural language in, calendar operations out | Planned |
 | 4 | Multi-step reasoning ("reschedule all my tasks for tomorrow") | Planned |
 | 5 | Interface and polish | Planned |
+
+### Week 1 sprint tasks
+
+| Task | Deliverable | Where |
+|------|-------------|-------|
+| 1 | Project structure and dependencies | this repo |
+| 2 | Google Cloud project, OAuth consent, credentials, local auth | `get_calendar_service()` + the setup steps below |
+| 3 | `get_events()` | `app/calendar_service.py` |
+| 4 | `create_event()` | `app/calendar_service.py` |
+| 5 | `update_event()`, `delete_event()` | `app/calendar_service.py` |
 
 ## Project structure
 
@@ -28,7 +39,9 @@ Task-Pilot/
 │   ├── __init__.py
 │   ├── config.py            # settings loaded from .env, with defaults
 │   ├── calendar_service.py  # the only module that talks to Google Calendar
-│   └── main.py              # Week 1 smoke test
+│   └── main.py              # Week 1 demo: read, create, update, delete
+├── tests/
+│   └── test_calendar_service.py
 ├── requirements.txt
 ├── .env.example             # copy to .env
 ├── .gitignore
@@ -39,6 +52,32 @@ Task-Pilot/
 API. Its functions take an authenticated `service` object as their first
 argument, so the agent added in a later week can wrap them as tools directly,
 authenticating once and reusing the client across many calls.
+
+## The calendar functions
+
+All of these live in `app/calendar_service.py` and take an authenticated
+`service` as their first argument.
+
+| Function | What it does |
+|---|---|
+| `get_calendar_service()` | Authenticates (browser on first run) and returns the API client |
+| `get_calendar_summary(service)` | The calendar's display name — a cheap check that auth worked |
+| `get_events(service, max_results=10)` | Upcoming events, recurring ones expanded, ordered by start time |
+| `create_event(service, summary, start, end, description=None, location=None)` | Creates a timed event, returns it (with `id` and `htmlLink`) |
+| `update_event(service, event_id, summary=None, start=None, end=None, ...)` | Changes only the fields you pass, via `patch` |
+| `delete_event(service, event_id)` | Deletes; returns `True`, or `False` if it was already gone |
+
+`start` and `end` are naive `datetime` objects, interpreted in `TIMEZONE`.
+
+Two deliberate choices worth knowing before Week 2 builds on them:
+
+- **`update_event` uses `patch`, not `update`.** You can move a start time
+  without sending back the whole event body, and fields you do not mention are
+  left untouched. Calling it with nothing to change raises `ValueError` rather
+  than making a silent no-op request.
+- **`delete_event` treats "already deleted" as success.** Google answers `410
+  Gone` for an event that no longer exists; that returns `False` instead of
+  raising, which keeps deletion idempotent once an agent can retry a step.
 
 ## Google Cloud setup
 
@@ -117,27 +156,72 @@ granting access to your own project.
 
 After you approve, a `token.json` is written and later runs need no interaction.
 
-Expected output:
+The demo walks through every Week 1 operation in order. Expected output:
 
 ```
-Connecting to Google Calendar...
+============================================================
+Connecting to Google Calendar
+============================================================
 Connected to calendar: you@example.com
 Calendar ID: primary   Timezone: Asia/Kolkata
 
-Creating event 'Task-Pilot Test Event'
-  Mon 24 Aug 2026, 10:00 AM - 11:00 AM
-Event created (id: 7f3k2m9p1q...)
+============================================================
+Task 3 - get_events()
+============================================================
+Upcoming Events:
+
+1. Project Meeting
+   2026-08-31 10:00
+
+2. DSA Study
+   2026-08-31 18:30
+
+============================================================
+Task 4 - create_event()
+============================================================
+Creating 'Agentic AI Project Work'
+  Mon 31 Aug 2026, 06:00 PM - 07:00 PM (1 hour)
+Created (id: 7f3k2m9p1q...)
   https://www.google.com/calendar/event?eid=...
 
-Next 5 upcoming event(s):
-  2026-08-24T10:00:00+05:30 Task-Pilot Test Event
-  ...
+Re-reading the calendar to confirm it is really there:
+  Confirmed: 'Agentic AI Project Work' is on the calendar.
 
-Done. Week 1 objective met: connected and created an event.
+============================================================
+Task 5 - update_event() and delete_event()
+============================================================
+Created a throwaway event to modify (id: 3a8b...)
+  'Task-Pilot Temp Event' at 2026-08-31 21:00
+
+update_event() -> renamed and moved:
+  'Task-Pilot Temp Event (renamed)' at 2026-08-31 22:00
+
+delete_event() -> removing it again:
+  deleted: True
+  deleting again (already gone): False
+
+============================================================
+Done
+============================================================
+All Week 1 operations succeeded: read, create, update, delete.
+'Agentic AI Project Work' was left on your calendar - go and look at it.
 ```
 
-Open the printed link, or check your Google Calendar for tomorrow at 10 AM, to
-confirm the event is really there.
+Task 5 deliberately works on a throwaway event and deletes it again, so the
+event created for Task 4 stays on your calendar. Open the printed link, or look
+at tomorrow at 6 PM in Google Calendar, to confirm it is really there.
+
+## Running the tests
+
+```bash
+python -m unittest discover -s tests -t . -v
+```
+
+The tests drive the calendar helpers against a fake Google client, so they run
+offline with no credentials and never touch a real calendar. They check the
+request bodies actually sent to the API — the part that is easy to get wrong and
+impossible to verify by reading the code. They use only the standard library, so
+they add no dependencies beyond the four the sprint allows.
 
 ## Configuration
 
