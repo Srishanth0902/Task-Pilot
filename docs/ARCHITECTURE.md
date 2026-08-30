@@ -964,13 +964,13 @@ injected client — which is precisely what makes the port extraction mechanical
 | `app/calendar_service.py` → CRUD functions | `providers/google_client.py` implementing `CalendarPort` | Week 2 |
 | Google event dicts returned to callers | `providers/mapper.py` → `CalendarEvent` | Week 2 |
 | `app/config.py` module globals | `Settings` object injected via `deps.py` | Week 2 |
-| `app/main.py` smoke test | `app/cli.py` | Week 2 |
+| `app/main.py` demo script | `app/cli.py` | Week 2 |
 
 Week by week, the layers arrive in dependency order:
 
 | Week | Adds | Layer |
 |------|------|-------|
-| 1 ✅ | OAuth + read/create against Google | provider (informal) |
+| 1 ✅ | OAuth + full CRUD against Google | provider (informal) |
 | 2 | `domain/`, `providers/` with port + fake, `services/event_service.py`, tool schemas, `timex.py` | 1–3 |
 | 3 | `agent/` — state, nodes, routing, checkpointer | 4 |
 | 4 | `availability.py`, `bulk.py`, plan/confirm gate, `journal.py` | 3–4 |
