@@ -1,8 +1,7 @@
 """Everything that talks to the Google Calendar API.
 
-This is the only module that knows about Google. Keeping it isolated means the
-LangGraph agent added in a later week can wrap these functions as tools without
-touching any API details.
+This is the only module that knows about Google. Keeping it isolated lets the
+LangChain tool layer wrap these functions without touching any API details.
 
 The CRUD helpers take an authenticated ``service`` as their first argument
 instead of building one themselves, so a caller authenticates once and reuses
@@ -61,44 +60,117 @@ def get_calendar_summary(service) -> str:
     return calendar.get("summary", CALENDAR_ID)
 
 
-def get_events(service, max_results=10):
-    """Return the next ``max_results`` events starting from now.
+def _normalise_event(event):
+    """Reduce Google's large event resource to our stable public contract."""
+    start = event.get("start", {})
+    end = event.get("end", {})
+    return {
+        "event_id": event.get("id"),
+        "title": event.get("summary", "(no title)"),
+        "start": start.get("dateTime", start.get("date")),
+        "end": end.get("dateTime", end.get("date")),
+        "description": event.get("description"),
+        "location": event.get("location"),
+        "html_link": event.get("htmlLink"),
+        "status": event.get("status"),
+    }
+
+
+def _failure(error):
+    result = {
+        "success": False,
+        "error": str(error),
+        "error_type": type(error).__name__,
+    }
+    status = getattr(getattr(error, "resp", None), "status", None)
+    if status is not None:
+        result["status_code"] = status
+    return result
+
+
+def _iso(value):
+    """Return an RFC3339 value and reject ambiguous naive datetimes."""
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("Calendar datetimes must be timezone-aware.")
+    return value.isoformat()
+
+
+def get_events(service, max_results=10, time_min=None, time_max=None):
+    """Return structured upcoming events in chronological order.
 
     Recurring events are expanded into individual occurrences and the list is
-    ordered by start time, so the result reads like a real agenda.
+    ordered by start time. ``time_min`` defaults to the current UTC instant.
     """
-    now = datetime.now(timezone.utc).isoformat()
-    response = (
-        service.events()
-        .list(
-            calendarId=CALENDAR_ID,
-            timeMin=now,
-            maxResults=max_results,
-            singleEvents=True,
-            orderBy="startTime",
-        )
-        .execute()
-    )
-    return response.get("items", [])
+    params = {
+        "calendarId": CALENDAR_ID,
+        "timeMin": (
+            _iso(time_min) if time_min else datetime.now(timezone.utc).isoformat()
+        ),
+        "maxResults": max_results,
+        "singleEvents": True,
+        "orderBy": "startTime",
+    }
+    if time_max:
+        params["timeMax"] = _iso(time_max)
+
+    try:
+        response = service.events().list(**params).execute()
+    except HttpError as error:
+        return _failure(error)
+
+    events = [_normalise_event(item) for item in response.get("items", [])]
+    return {"success": True, "count": len(events), "events": events}
+
+
+def search_events(service, query, max_results=10, time_min=None, time_max=None):
+    """Search events by Google's free-text query and return structured matches."""
+    params = {
+        "calendarId": CALENDAR_ID,
+        "q": query,
+        "timeMin": (
+            _iso(time_min) if time_min else datetime.now(timezone.utc).isoformat()
+        ),
+        "maxResults": max_results,
+        "singleEvents": True,
+        "orderBy": "startTime",
+    }
+    if time_max:
+        params["timeMax"] = _iso(time_max)
+
+    try:
+        response = service.events().list(**params).execute()
+    except HttpError as error:
+        return _failure(error)
+
+    events = [_normalise_event(item) for item in response.get("items", [])]
+    return {
+        "success": True,
+        "query": query,
+        "count": len(events),
+        "events": events,
+    }
 
 
 def create_event(service, summary, start, end, description=None, location=None):
-    """Create a timed event and return the created event resource.
-
-    ``start`` and ``end`` are naive local ``datetime`` objects interpreted in
-    ``TIMEZONE``. The returned dict includes ``id`` and ``htmlLink``.
-    """
+    """Create a timed event and return a stable structured result."""
     body = {
         "summary": summary,
-        "start": {"dateTime": start.isoformat(), "timeZone": TIMEZONE},
-        "end": {"dateTime": end.isoformat(), "timeZone": TIMEZONE},
+        "start": {"dateTime": _iso(start), "timeZone": TIMEZONE},
+        "end": {"dateTime": _iso(end), "timeZone": TIMEZONE},
     }
     if description:
         body["description"] = description
     if location:
         body["location"] = location
 
-    return service.events().insert(calendarId=CALENDAR_ID, body=body).execute()
+    try:
+        event = (
+            service.events().insert(calendarId=CALENDAR_ID, body=body).execute()
+        )
+    except HttpError as error:
+        return _failure(error)
+
+    return {"success": True, **_normalise_event({**body, **event})}
 
 
 def update_event(
@@ -110,7 +182,7 @@ def update_event(
     description=None,
     location=None,
 ):
-    """Update selected fields of an existing event and return it.
+    """Update selected fields and return a stable structured result.
 
     Only the arguments you pass are changed — everything else on the event is
     left alone. This uses ``patch`` rather than ``update`` precisely so callers
@@ -123,9 +195,9 @@ def update_event(
     if summary is not None:
         body["summary"] = summary
     if start is not None:
-        body["start"] = {"dateTime": start.isoformat(), "timeZone": TIMEZONE}
+        body["start"] = {"dateTime": _iso(start), "timeZone": TIMEZONE}
     if end is not None:
-        body["end"] = {"dateTime": end.isoformat(), "timeZone": TIMEZONE}
+        body["end"] = {"dateTime": _iso(end), "timeZone": TIMEZONE}
     if description is not None:
         body["description"] = description
     if location is not None:
@@ -134,25 +206,29 @@ def update_event(
     if not body:
         raise ValueError("update_event() needs at least one field to change.")
 
-    return (
-        service.events()
-        .patch(calendarId=CALENDAR_ID, eventId=event_id, body=body)
-        .execute()
-    )
+    try:
+        event = (
+            service.events()
+            .patch(calendarId=CALENDAR_ID, eventId=event_id, body=body)
+            .execute()
+        )
+    except HttpError as error:
+        return _failure(error)
+
+    return {"success": True, **_normalise_event(event)}
 
 
 def delete_event(service, event_id):
-    """Delete an event by id.
-
-    Returns True if the event was deleted, False if it was already gone.
-    Google returns 410 Gone for an event that no longer exists; treating that
-    as success keeps deletion idempotent, which matters once an agent may
-    retry a failed step.
-    """
+    """Delete by id and return an idempotent structured result."""
     try:
         service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
     except HttpError as error:
         if error.resp.status in (404, 410):
-            return False
-        raise
-    return True
+            return {
+                "success": True,
+                "event_id": event_id,
+                "deleted": False,
+                "message": "Event was already absent.",
+            }
+        return _failure(error)
+    return {"success": True, "event_id": event_id, "deleted": True}

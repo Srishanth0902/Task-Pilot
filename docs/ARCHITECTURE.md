@@ -390,7 +390,7 @@ and deployment need genuinely different ones:
 This matters more than it looks. The current README's troubleshooting section
 already notes that `run_local_server()` cannot work on a headless machine — so
 the moment the app is deployed, a desktop OAuth client stops being viable.
-Putting a seam here in Week 2 costs nothing; discovering it in Week 6 costs a
+Putting a seam here in Week 3 costs nothing; discovering it in Week 6 costs a
 rewrite of the auth path during deployment week.
 
 `TokenStore` is likewise a small port: `FileTokenStore` today, an encrypted
@@ -716,8 +716,10 @@ in domain and service code carries a tzinfo. Naive datetimes exist only inside
 locals with a separate `timeZone` field; the mapper will do that conversion so
 that no caller has to think about it.
 
-The resolver must cover the plan's Week 2 list — `tomorrow`, `next Monday`,
-`Friday at 6 PM`, `in two hours`, `next week` — plus the cases that actually
+`app/date_utils.py` already covers the plan's Week 2 list — `tomorrow`,
+`next Monday`, `Friday at 6 PM`, `in two hours`, `next week`. Moving it to
+`timex.py` and resolving against an injected clock is what remains. It must also
+grow the cases that actually
 bite: "tonight", "this weekend", ambiguous bare hours (does "at 6" mean 6 AM or
 6 PM? default to the next occurrence within waking hours), DST transitions, and
 end-of-week/month rollovers. Build it as a table-driven parser with a fixture
@@ -948,7 +950,7 @@ environments. `GET /health/ready` gates the rollout.
 The one deployment-specific piece of work is auth: the deployed app must use a
 **Web application** OAuth client with a registered redirect URI, not the desktop
 client used locally. That is exactly the `WebFlow` strategy from §6.3, which is
-why the seam is created in Week 2 rather than discovered in Week 6.
+why the seam is created in Week 3 rather than discovered in Week 6.
 
 ---
 
@@ -960,27 +962,34 @@ injected client — which is precisely what makes the port extraction mechanical
 
 | Today | Becomes | When |
 |-------|---------|------|
-| `app/calendar_service.py` → `get_calendar_service()` | `providers/google_auth.py` | Week 2 |
-| `app/calendar_service.py` → CRUD functions | `providers/google_client.py` implementing `CalendarPort` | Week 2 |
-| Google event dicts returned to callers | `providers/mapper.py` → `CalendarEvent` | Week 2 |
-| `app/config.py` module globals | `Settings` object injected via `deps.py` | Week 2 |
-| `app/main.py` demo script | `app/cli.py` | Week 2 |
+| `app/calendar_service.py` → `get_calendar_service()` | `providers/google_auth.py` | Week 3 |
+| `app/calendar_service.py` → CRUD functions | `providers/google_client.py` implementing `CalendarPort` | Week 3 |
+| `app/calendar_service.py` → structured result dicts | `providers/mapper.py` → `CalendarEvent` | Week 3 |
+| `app/schemas.py` Pydantic inputs | `agent/tools/schemas.py` (unchanged in substance) | Week 3 |
+| `app/calendar_tools.py` → five `StructuredTool`s | `agent/tools/` split read / plan / apply | Week 3 |
+| `app/date_utils.py` | `domain/timex.py`, resolving against an injected `Clock` | Week 3 |
+| `app/agent.py` → `run_calendar_request()` | `agent/graph.py` — LangGraph node chain | Week 3 |
+| `app/config.py` module globals | `Settings` object injected via `deps.py` | Week 3 |
+| `app/main.py` demo script | `app/cli.py` | Week 3 |
 
 Week by week, the layers arrive in dependency order:
 
 | Week | Adds | Layer |
 |------|------|-------|
 | 1 ✅ | OAuth + full CRUD against Google | provider (informal) |
-| 2 | `domain/`, `providers/` with port + fake, `services/event_service.py`, tool schemas, `timex.py` | 1–3 |
-| 3 | `agent/` — state, nodes, routing, checkpointer | 4 |
+| 2 ✅ | Structured CRUD results, Pydantic schemas, `StructuredTool`s, relative-date parsing | tools (informal) |
+| 3 | `domain/`, `providers/` with port + fake, `services/event_service.py`, `timex.py`; then `agent/` — state, nodes, routing, checkpointer | 1–4 |
 | 4 | `availability.py`, `bulk.py`, plan/confirm gate, `journal.py` | 3–4 |
 | 5 | `api/`, `ui/`, `tests/` | 5 |
 | 6 | `evals/`, `observability/`, deployment, docs | cross-cutting |
 
-The highest-leverage move is **Week 2**: extract `CalendarPort`, write
-`FakeCalendarAdapter` alongside it, and inject the `Clock`. Those three changes
-take an afternoon at that stage and are what make Weeks 3–6 testable. Deferred
-to Week 5, the same changes require touching every module written in between.
+Week 2 shipped without the port: `calendar_service.py` gained structured
+results and the tools call it directly. That is still the highest-leverage move
+available, and it is now the **first thing Week 3 should do** — extract
+`CalendarPort`, write `FakeCalendarAdapter` alongside it, and inject the
+`Clock`. Three changes, an afternoon at this stage, and they are what make the
+graph and the Week 6 evaluations testable. Deferred to Week 5, the same changes
+require touching every module written in between.
 
 ---
 
