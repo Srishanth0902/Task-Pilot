@@ -28,6 +28,7 @@ from app.calendar_service import (
     update_event,
 )
 from app.config import CALENDAR_ID, TIMEZONE
+from app.date_utils import local_now
 
 # Task 4's test case, verbatim from the sprint brief.
 PROJECT_EVENT = "Agentic AI Project Work"
@@ -38,8 +39,8 @@ TEMP_EVENT = "Task-Pilot Temp Event"
 
 
 def _tomorrow_at(hour):
-    """Return tomorrow at the given hour, on the minute."""
-    return (datetime.now() + timedelta(days=1)).replace(
+    """Return a timezone-aware local time tomorrow, on the minute."""
+    return (local_now() + timedelta(days=1)).replace(
         hour=hour, minute=0, second=0, microsecond=0
     )
 
@@ -51,6 +52,10 @@ def _start_of(event):
     labelled rather than given a fake midnight time.
     """
     start = event.get("start", {})
+    if isinstance(start, str):
+        if "T" not in start:
+            return f"{start} (all day)"
+        return datetime.fromisoformat(start).strftime("%Y-%m-%d %H:%M")
     if "dateTime" in start:
         return datetime.fromisoformat(start["dateTime"]).strftime("%Y-%m-%d %H:%M")
     if "date" in start:
@@ -60,7 +65,10 @@ def _start_of(event):
 
 def show_events(service, max_results=10):
     """Print upcoming events in the sprint's expected format."""
-    events = get_events(service, max_results=max_results)
+    result = get_events(service, max_results=max_results)
+    if not result["success"]:
+        raise RuntimeError(result["error"])
+    events = result["events"]
 
     print("Upcoming Events:")
     print()
@@ -70,7 +78,7 @@ def show_events(service, max_results=10):
         return events
 
     for index, event in enumerate(events, start=1):
-        print(f"{index}. {event.get('summary', '(no title)')}")
+        print(f"{index}. {event.get('title', '(no title)')}")
         print(f"   {_start_of(event)}")
         print()
     return events
@@ -104,11 +112,16 @@ def run():
         end=end,
         description="Created by the Task-Pilot Week 1 sprint demo.",
     )
-    print(f"Created (id: {event['id']})")
-    print(f"  {event.get('htmlLink', '')}")
+    if not event["success"]:
+        raise RuntimeError(event["error"])
+    print(f"Created (id: {event['event_id']})")
+    print(f"  {event.get('html_link', '')}")
 
     print("\nRe-reading the calendar to confirm it is really there:")
-    summaries = [item.get("summary") for item in get_events(service, max_results=10)]
+    reread = get_events(service, max_results=10)
+    if not reread["success"]:
+        raise RuntimeError(reread["error"])
+    summaries = [item.get("title") for item in reread.get("events", [])]
     if PROJECT_EVENT in summaries:
         print(f"  Confirmed: '{PROJECT_EVENT}' is on the calendar.")
     else:
@@ -127,23 +140,33 @@ def run():
         start=temp_start,
         end=temp_start + timedelta(minutes=30),
     )
-    print(f"Created a throwaway event to modify (id: {temp['id']})")
+    if not temp["success"]:
+        raise RuntimeError(temp["error"])
+    print(f"Created a throwaway event to modify (id: {temp['event_id']})")
     print(f"  '{TEMP_EVENT}' at {temp_start:%Y-%m-%d %H:%M}")
 
     moved_start = _tomorrow_at(22)
     updated = update_event(
         service,
-        temp["id"],
+        temp["event_id"],
         summary="Task-Pilot Temp Event (renamed)",
         start=moved_start,
         end=moved_start + timedelta(minutes=30),
     )
     print("\nupdate_event() -> renamed and moved:")
-    print(f"  '{updated.get('summary')}' at {_start_of(updated)}")
+    if not updated["success"]:
+        raise RuntimeError(updated["error"])
+    print(f"  '{updated.get('title')}' at {_start_of(updated)}")
 
     print("\ndelete_event() -> removing it again:")
-    print(f"  deleted: {delete_event(service, temp['id'])}")
-    print(f"  deleting again (already gone): {delete_event(service, temp['id'])}")
+    deleted = delete_event(service, temp["event_id"])
+    deleted_again = delete_event(service, temp["event_id"])
+    if not deleted["success"]:
+        raise RuntimeError(deleted["error"])
+    if not deleted_again["success"]:
+        raise RuntimeError(deleted_again["error"])
+    print(f"  deleted: {deleted.get('deleted')}")
+    print(f"  deleting again (already gone): {deleted_again.get('deleted')}")
 
     section("Done")
     print("All Week 1 operations succeeded: read, create, update, delete.")
@@ -164,6 +187,9 @@ def main():
             'See the "Troubleshooting" section of README.md.',
             file=sys.stderr,
         )
+        return 1
+    except RuntimeError as error:
+        print(f"\nCalendar operation failed:\n{error}", file=sys.stderr)
         return 1
     return 0
 

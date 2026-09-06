@@ -1,261 +1,214 @@
 # Task-Pilot
 
-An agentic AI assistant for calendar and task management.
+An agentic calendar assistant that turns natural-language requests into safe,
+structured Google Calendar operations.
 
-The goal is a conversational assistant you can talk to in plain English —
-*"Add a meeting tomorrow at 10 AM"*, *"Move my project work to Friday"*,
-*"Cancel my 3 PM task"* — that figures out which calendar operations are needed
-and carries them out for you, instead of making you click through a calendar UI.
-
-**Status: Week 1 code complete.** The app authenticates with Google Calendar
-and can read, create, update and delete events. The reasoning layer (LangChain /
-LangGraph) comes next.
+**Status:** Week 2 implementation is complete and tested offline. Google OAuth
+and a live LLM provider are deliberately deferred, so no real calendar was
+changed during development.
 
 ## Roadmap
 
 | Week | Goal | Status |
-|------|------|--------|
-| 1 | Project scaffold; full calendar CRUD against the real API | Code done |
-| 2 | LangChain tool definitions wrapping the calendar helpers | Next |
-| 3 | LangGraph agent: natural language in, calendar operations out | Planned |
-| 4 | Multi-step reasoning ("reschedule all my tasks for tomorrow") | Planned |
+|---|---|---|
+| 1 | Project scaffold and Google Calendar CRUD | Code complete; live OAuth pending |
+| 2 | Structured CRUD, Pydantic schemas, LangChain tools, relative dates | Implemented and offline-tested |
+| 3 | Advanced agent workflows | Planned |
+| 4 | Multi-step reasoning | Planned |
 | 5 | Interface and polish | Planned |
 
-### Week 1 sprint tasks
+## Architecture
 
-| Task | Deliverable | Where |
-|------|-------------|-------|
-| 1 | Project structure and dependencies | this repo |
-| 2 | Google Cloud project, OAuth consent, credentials, local auth | `get_calendar_service()` + the setup steps below |
-| 3 | `get_events()` | `app/calendar_service.py` |
-| 4 | `create_event()` | `app/calendar_service.py` |
-| 5 | `update_event()`, `delete_event()` | `app/calendar_service.py` |
+```text
+User request
+    |
+    v
+Injected LangChain-compatible LLM
+    |
+    v
+Tool selection + Pydantic validation
+    |
+    v
+Structured Calendar tool
+    |
+    v
+Google Calendar API
+```
+
+Neither the model nor the Google service is created at import time. Both are
+injected, which keeps the code provider-independent and makes the whole Week 2
+path testable using scripted fakes.
 
 ## Project structure
 
-```
+```text
 Task-Pilot/
-├── app/
-│   ├── __init__.py
-│   ├── config.py            # settings loaded from .env, with defaults
-│   ├── calendar_service.py  # the only module that talks to Google Calendar
-│   └── main.py              # Week 1 demo: read, create, update, delete
-├── tests/
-│   └── test_calendar_service.py
-├── requirements.txt
-├── .env.example             # copy to .env
-├── .gitignore
-└── README.md
+|-- app/
+|   |-- agent.py              # provider-independent LangChain agent factory
+|   |-- calendar_service.py   # Google OAuth and structured Calendar CRUD
+|   |-- calendar_tools.py     # five LangChain StructuredTool definitions
+|   |-- config.py             # environment-backed configuration
+|   |-- date_utils.py         # timezone-aware relative-date parsing
+|   |-- main.py               # live Google Calendar CRUD demonstration
+|   `-- schemas.py            # Pydantic input contracts
+|-- tests/                    # offline service, schema, tool, date, and agent tests
+|-- requirements.txt
+|-- .env.example
+|-- .gitignore
+`-- README.md
 ```
 
-`calendar_service.py` is deliberately the only place that knows about the Google
-API. Its functions take an authenticated `service` object as their first
-argument, so the agent added in a later week can wrap them as tools directly,
-authenticating once and reusing the client across many calls.
+## Week 2 functionality
 
-## The calendar functions
+### Structured Calendar operations
 
-All of these live in `app/calendar_service.py` and take an authenticated
-`service` as their first argument.
+The functions in `app/calendar_service.py` all return dictionaries instead of
+raw Google resources. Successful create/update output follows this shape:
 
-| Function | What it does |
+```json
+{
+  "success": true,
+  "event_id": "abc123",
+  "title": "DSA Study",
+  "start": "2026-08-25T18:00:00+05:30",
+  "end": "2026-08-25T19:00:00+05:30",
+  "description": null,
+  "location": null,
+  "html_link": "https://calendar.google.com/...",
+  "status": "confirmed"
+}
+```
+
+Implemented operations:
+
+| Function | Purpose |
 |---|---|
-| `get_calendar_service()` | Authenticates (browser on first run) and returns the API client |
-| `get_calendar_summary(service)` | The calendar's display name — a cheap check that auth worked |
-| `get_events(service, max_results=10)` | Upcoming events, recurring ones expanded, ordered by start time |
-| `create_event(service, summary, start, end, description=None, location=None)` | Creates a timed event, returns it (with `id` and `htmlLink`) |
-| `update_event(service, event_id, summary=None, start=None, end=None, ...)` | Changes only the fields you pass, via `patch` |
-| `delete_event(service, event_id)` | Deletes; returns `True`, or `False` if it was already gone |
+| `get_events()` | List upcoming events in chronological order |
+| `search_events()` | Search upcoming event text using Google's `q` parameter |
+| `create_event()` | Create a timezone-aware timed event |
+| `update_event()` | Patch only supplied fields |
+| `delete_event()` | Idempotently delete by event ID |
 
-`start` and `end` are naive `datetime` objects, interpreted in `TIMEZONE`.
+API failures also return structured data with `success: false`, an error type,
+message, and HTTP status code when Google supplies one.
 
-Two deliberate choices worth knowing before Week 2 builds on them:
+### Pydantic schemas
 
-- **`update_event` uses `patch`, not `update`.** You can move a start time
-  without sending back the whole event body, and fields you do not mention are
-  left untouched. Calling it with nothing to change raises `ValueError` rather
-  than making a silent no-op request.
-- **`delete_event` treats "already deleted" as success.** Google answers `410
-  Gone` for an event that no longer exists; that returns `False` instead of
-  raising, which keeps deletion idempotent once an agent can retry a step.
+`app/schemas.py` defines:
 
-## Google Cloud setup
+- `CreateEventInput`
+- `GetEventsInput`
+- `SearchEventInput`
+- `UpdateEventInput`
+- `DeleteEventInput`
 
-You need an OAuth client so the app can act on your calendar with your
-permission. This is free and takes about ten minutes.
+They validate required fields, event ranges, update semantics, result limits,
+and timezone handling. A missing create-event end time defaults to one hour
+after the start.
 
-### 1. Create a project
+### LangChain tools
 
-1. Go to <https://console.cloud.google.com/>.
-2. Click the project dropdown in the top bar, then **New Project**.
-3. Name it `Task-Pilot` and click **Create**.
-4. Make sure the new project is selected in the top bar before continuing.
+`build_calendar_tools(service)` returns five `StructuredTool` instances:
 
-### 2. Enable the Google Calendar API
+- `create_calendar_event`
+- `list_calendar_events`
+- `search_calendar_events`
+- `update_calendar_event`
+- `delete_calendar_event`
 
-1. Go to **APIs & Services → Library**
-   (<https://console.cloud.google.com/apis/library>).
-2. Search for **Google Calendar API** and open it.
-3. Click **Enable**.
+The service can be a real authenticated Google client or a fake one. The test
+suite also runs a complete agent loop with a scripted fake chat model, proving
+that LangChain can select and execute `create_calendar_event` without an API
+key.
 
-### 3. Configure the consent screen
+### Relative dates and timezone rules
 
-In newer versions of the console this lives under **Google Auth Platform**; in
-older ones it is **APIs & Services → OAuth consent screen**. Either way:
+Internally, timed events always use timezone-aware ISO-8601 values. Supported
+input includes:
 
-1. Choose **External** as the user type and click **Create**.
-   (**Internal** is only available on Google Workspace accounts and skips the
-   test-user step below.)
-2. Fill in the required fields — app name (`Task-Pilot`), user support email,
-   and developer contact email. Everything else can be left blank.
-3. On the **Scopes** step, click **Save and Continue** without adding any. The
-   app requests its scope at runtime; you do not need to declare it here.
-4. On the **Test users** step, click **Add users** and enter **your own Google
-   account address** — the one whose calendar you want to manage. **Do not skip
-   this.** While the app is unpublished, only listed test users can sign in.
-5. Click **Save and Continue**, then **Back to Dashboard**.
+- `tomorrow at 6 PM`
+- `next Monday at 9 AM`
+- `Friday at 6 PM`
+- `in two hours`
+- `next week`
+- ISO-8601, with or without an offset
 
-### 4. Create the OAuth client
+Naive ISO values are interpreted in `TIMEZONE`; aware values are converted to
+that timezone. A bare weekday always resolves to a future occurrence. `next
+week` means exactly seven days later and preserves the current local time unless
+a time is explicitly included.
 
-1. Go to **APIs & Services → Credentials**
-   (<https://console.cloud.google.com/apis/credentials>).
-2. Click **Create Credentials → OAuth client ID**.
-3. Set **Application type** to **Desktop app**. This matters — a *Web
-   application* client will fail with `redirect_uri_mismatch`.
-4. Name it `Task-Pilot Desktop` and click **Create**.
-5. Click **Download JSON** in the confirmation dialog.
-6. Save that file as **`credentials.json`** in the root of this repository
-   (next to `requirements.txt`).
+## Install and test offline
 
-> `credentials.json` and `token.json` are both listed in `.gitignore`. Never
-> commit them — they grant access to your calendar.
+PowerShell:
 
-## Install and run
-
-```bash
-git clone https://github.com/Srishanth0902/Task-Pilot.git
-cd Task-Pilot
-
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-
-pip install -r requirements.txt
-cp .env.example .env            # Windows: copy .env.example .env
-```
-
-Put your `credentials.json` in the project root, then:
-
-```bash
-python -m app.main
-```
-
-The first run opens a browser asking you to sign in and grant calendar access.
-Google will warn that the app is unverified — click **Advanced → Go to
-Task-Pilot (unsafe)**. That warning is expected for an app in testing; you are
-granting access to your own project.
-
-After you approve, a `token.json` is written and later runs need no interaction.
-
-The demo walks through every Week 1 operation in order. Expected output:
-
-```
-============================================================
-Connecting to Google Calendar
-============================================================
-Connected to calendar: you@example.com
-Calendar ID: primary   Timezone: Asia/Kolkata
-
-============================================================
-Task 3 - get_events()
-============================================================
-Upcoming Events:
-
-1. Project Meeting
-   2026-08-31 10:00
-
-2. DSA Study
-   2026-08-31 18:30
-
-============================================================
-Task 4 - create_event()
-============================================================
-Creating 'Agentic AI Project Work'
-  Mon 31 Aug 2026, 06:00 PM - 07:00 PM (1 hour)
-Created (id: 7f3k2m9p1q...)
-  https://www.google.com/calendar/event?eid=...
-
-Re-reading the calendar to confirm it is really there:
-  Confirmed: 'Agentic AI Project Work' is on the calendar.
-
-============================================================
-Task 5 - update_event() and delete_event()
-============================================================
-Created a throwaway event to modify (id: 3a8b...)
-  'Task-Pilot Temp Event' at 2026-08-31 21:00
-
-update_event() -> renamed and moved:
-  'Task-Pilot Temp Event (renamed)' at 2026-08-31 22:00
-
-delete_event() -> removing it again:
-  deleted: True
-  deleting again (already gone): False
-
-============================================================
-Done
-============================================================
-All Week 1 operations succeeded: read, create, update, delete.
-'Agentic AI Project Work' was left on your calendar - go and look at it.
-```
-
-Task 5 deliberately works on a throwaway event and deletes it again, so the
-event created for Task 4 stays on your calendar. Open the printed link, or look
-at tomorrow at 6 PM in Google Calendar, to confirm it is really there.
-
-## Running the tests
-
-```bash
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 python -m unittest discover -s tests -t . -v
 ```
 
-The tests drive the calendar helpers against a fake Google client, so they run
-offline with no credentials and never touch a real calendar. They check the
-request bodies actually sent to the API — the part that is easy to get wrong and
-impossible to verify by reading the code. They use only the standard library, so
-they add no dependencies beyond the four the sprint allows.
+The tests do not need `credentials.json`, `token.json`, an OpenAI key, or any
+network access. They cover the Google request payloads, structured responses,
+schemas, all required date phrases, LangChain tool schemas, and a fake-model
+tool-selection loop.
+
+## Connecting a model later
+
+The project intentionally does not install a model-provider package. When a
+provider is selected, create its LangChain chat model and inject it:
+
+```python
+from app.agent import run_calendar_request
+from app.calendar_service import get_calendar_service
+
+service = get_calendar_service()
+model = your_langchain_compatible_chat_model
+
+result = run_calendar_request(
+    "Add ML study tomorrow at 6 PM",
+    model=model,
+    service=service,
+)
+```
+
+The application code does not need to change when switching between OpenAI,
+Anthropic, Google, or a compatible local model; only model construction changes.
+
+## Google Cloud setup (deferred live test)
+
+1. Create or select a project in the Google Cloud Console.
+2. Enable the Google Calendar API.
+3. Configure Google Auth Platform branding and audience.
+4. For an external app in Testing, add your Google account as a test user.
+5. Under Google Auth Platform > Clients, create a **Desktop app** client.
+6. Download it as `credentials.json` into the repository root.
+7. Run `python -m app.main` and approve access in the browser.
+
+The app writes the resulting OAuth token to `token.json`. Both files, along
+with `.env`, are excluded by `.gitignore` and must never be committed.
+
+The live demo reads upcoming events, creates `Agentic AI Project Work` tomorrow
+at 6 PM for one hour, reads the calendar again, and exercises update/delete on
+a throwaway event.
 
 ## Configuration
 
-All settings are optional — see `.env.example` for the full list.
+Copy `.env.example` to `.env` if you want to override defaults.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GOOGLE_CREDENTIALS_FILE` | `credentials.json` | OAuth client downloaded from Google Cloud |
-| `GOOGLE_TOKEN_FILE` | `token.json` | Cached login, created automatically |
-| `GOOGLE_CALENDAR_ID` | `primary` | Which calendar to use |
-| `TIMEZONE` | `Asia/Kolkata` | IANA timezone for created events |
+| `GOOGLE_CREDENTIALS_FILE` | `credentials.json` | Desktop OAuth client file |
+| `GOOGLE_TOKEN_FILE` | `token.json` | Cached user authorization |
+| `GOOGLE_CALENDAR_ID` | `primary` | Calendar to operate on |
+| `TIMEZONE` | `Asia/Kolkata` | IANA timezone for event operations |
 
-## Troubleshooting
+## Deferred acceptance checks
 
-**`Google OAuth client file not found`**
-`credentials.json` is missing from the project root. Redo step 4 above, or point
-`GOOGLE_CREDENTIALS_FILE` in `.env` at wherever you saved it.
+These require credentials and have not been claimed as complete:
 
-**`Error 403: access_denied`**
-Your Google account is not on the consent screen's **Test users** list. Add it
-(step 3.4) and try again.
-
-**`Error 400: redirect_uri_mismatch`**
-The OAuth client was created as a *Web application*. Create a new one with
-application type **Desktop app** (step 4.3) and replace `credentials.json`.
-
-**`Google Calendar API has not been used in project ... before or it is disabled`**
-The API is not enabled. Redo step 2, then wait a minute for it to propagate.
-
-**`invalid_grant` or repeated auth failures**
-The cached token has gone stale or its scopes changed. Delete `token.json` and
-run again to re-authenticate.
-
-**Browser does not open, or you are on a remote/headless machine**
-`run_local_server()` needs a browser on the same machine. Run the first
-authentication on your own computer, then copy the generated `token.json` to the
-remote machine.
+- OAuth sign-in against a real Google account
+- Reading a real calendar
+- Creating and visually confirming a real event
+- Natural-language tool selection by a live LLM provider

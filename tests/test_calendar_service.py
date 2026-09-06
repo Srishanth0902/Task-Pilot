@@ -1,9 +1,8 @@
 """Tests for the calendar helpers, driven against a fake Google client.
 
-These use only the standard library (unittest + unittest.mock) so the project
-keeps the four dependencies the Week 1 brief allows. They verify the request
-bodies we send to Google, which is the part that is easy to get wrong and
-impossible to check by reading the code alone.
+These use unittest and a fake Google client. They verify the request bodies we
+send to Google, which is the part that is easy to get wrong and impossible to
+check by reading the code alone.
 
 Run them with:
 
@@ -12,6 +11,7 @@ Run them with:
 
 import unittest
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from googleapiclient.errors import HttpError
 
@@ -20,6 +20,7 @@ from app.calendar_service import (
     create_event,
     delete_event,
     get_events,
+    search_events,
     update_event,
 )
 from app.main import _start_of
@@ -58,7 +59,9 @@ class FakeEvents:
 
     def insert(self, **kwargs):
         self.calls.append(("insert", kwargs))
-        return FakeRequest({"id": "new-id", "htmlLink": "http://example/new"})
+        return FakeRequest(
+            {"id": "new-id", "htmlLink": "http://example/new", **kwargs["body"]}
+        )
 
     def patch(self, **kwargs):
         self.calls.append(("patch", kwargs))
@@ -81,9 +84,11 @@ class GetEventsTests(unittest.TestCase):
     def test_requests_an_ordered_expanded_agenda(self):
         service = FakeService(list_result={"items": [{"summary": "A"}]})
 
-        events = get_events(service, max_results=7)
+        result = get_events(service, max_results=7)
 
-        self.assertEqual(events, [{"summary": "A"}])
+        self.assertTrue(result["success"])
+        self.assertEqual(result["count"], 1)
+        self.assertEqual(result["events"][0]["title"], "A")
         name, kwargs = service.events().calls[0]
         self.assertEqual(name, "list")
         self.assertEqual(kwargs["maxResults"], 7)
@@ -94,7 +99,25 @@ class GetEventsTests(unittest.TestCase):
         self.assertIn("timeMin", kwargs)
 
     def test_empty_calendar_returns_empty_list_not_none(self):
-        self.assertEqual(get_events(FakeService(list_result={})), [])
+        result = get_events(FakeService(list_result={}))
+        self.assertEqual(result["events"], [])
+        self.assertEqual(result["count"], 0)
+
+
+class SearchEventsTests(unittest.TestCase):
+    def test_searches_with_text_and_structured_results(self):
+        service = FakeService(
+            list_result={"items": [{"id": "evt-1", "summary": "DSA Study"}]}
+        )
+
+        result = search_events(service, "DSA", max_results=5)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["query"], "DSA")
+        self.assertEqual(result["events"][0]["event_id"], "evt-1")
+        _, kwargs = service.events().calls[0]
+        self.assertEqual(kwargs["q"], "DSA")
+        self.assertEqual(kwargs["maxResults"], 5)
 
 
 class CreateEventTests(unittest.TestCase):
@@ -104,27 +127,53 @@ class CreateEventTests(unittest.TestCase):
         create_event(
             service,
             summary="Agentic AI Project Work",
-            start=datetime(2026, 8, 24, 18, 0),
-            end=datetime(2026, 8, 24, 19, 0),
+            start=datetime(2026, 8, 24, 18, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+            end=datetime(2026, 8, 24, 19, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
         )
 
         _, kwargs = service.events().calls[0]
         body = kwargs["body"]
         self.assertEqual(body["summary"], "Agentic AI Project Work")
-        self.assertEqual(body["start"]["dateTime"], "2026-08-24T18:00:00")
-        self.assertEqual(body["end"]["dateTime"], "2026-08-24T19:00:00")
+        self.assertEqual(body["start"]["dateTime"], "2026-08-24T18:00:00+05:30")
+        self.assertEqual(body["end"]["dateTime"], "2026-08-24T19:00:00+05:30")
         self.assertEqual(body["start"]["timeZone"], calendar_service.TIMEZONE)
 
     def test_optional_fields_are_omitted_when_not_given(self):
         service = FakeService()
 
         create_event(
-            service, "x", datetime(2026, 8, 24, 1), datetime(2026, 8, 24, 2)
+            service,
+            "x",
+            datetime(2026, 8, 24, 1, tzinfo=ZoneInfo("Asia/Kolkata")),
+            datetime(2026, 8, 24, 2, tzinfo=ZoneInfo("Asia/Kolkata")),
         )
 
         body = service.events().calls[0][1]["body"]
         self.assertNotIn("description", body)
         self.assertNotIn("location", body)
+
+    def test_returns_the_week_2_structured_contract(self):
+        zone = ZoneInfo("Asia/Kolkata")
+        result = create_event(
+            FakeService(),
+            "DSA Study",
+            datetime(2026, 8, 25, 18, tzinfo=zone),
+            datetime(2026, 8, 25, 19, tzinfo=zone),
+        )
+
+        self.assertEqual(result["success"], True)
+        self.assertEqual(result["event_id"], "new-id")
+        self.assertEqual(result["title"], "DSA Study")
+        self.assertEqual(result["start"], "2026-08-25T18:00:00+05:30")
+
+    def test_rejects_naive_datetimes(self):
+        with self.assertRaises(ValueError):
+            create_event(
+                FakeService(),
+                "ambiguous",
+                datetime(2026, 8, 24, 1),
+                datetime(2026, 8, 24, 2),
+            )
 
 
 class UpdateEventTests(unittest.TestCase):
@@ -145,12 +194,14 @@ class UpdateEventTests(unittest.TestCase):
         update_event(
             service,
             "evt-1",
-            start=datetime(2026, 8, 24, 22, 0),
-            end=datetime(2026, 8, 24, 22, 30),
+            start=datetime(2026, 8, 24, 22, 0, tzinfo=ZoneInfo("Asia/Kolkata")),
+            end=datetime(2026, 8, 24, 22, 30, tzinfo=ZoneInfo("Asia/Kolkata")),
         )
 
         body = service.events().calls[0][1]["body"]
-        self.assertEqual(body["start"]["dateTime"], "2026-08-24T22:00:00")
+        self.assertEqual(
+            body["start"]["dateTime"], "2026-08-24T22:00:00+05:30"
+        )
         self.assertEqual(body["end"]["timeZone"], calendar_service.TIMEZONE)
         self.assertNotIn("summary", body)
 
@@ -167,20 +218,25 @@ class DeleteEventTests(unittest.TestCase):
     def test_returns_true_when_the_event_is_removed(self):
         service = FakeService()
 
-        self.assertTrue(delete_event(service, "evt-1"))
+        result = delete_event(service, "evt-1")
+        self.assertTrue(result["success"])
+        self.assertTrue(result["deleted"])
         self.assertEqual(service.events().calls[0][1]["eventId"], "evt-1")
 
     def test_already_deleted_is_reported_rather_than_raised(self):
         # Google answers 410 Gone for an event that is already deleted.
         gone = HttpError(FakeResponse(410), b"gone")
 
-        self.assertFalse(delete_event(FakeService(delete_error=gone), "evt-1"))
+        result = delete_event(FakeService(delete_error=gone), "evt-1")
+        self.assertTrue(result["success"])
+        self.assertFalse(result["deleted"])
 
-    def test_a_real_failure_still_propagates(self):
+    def test_a_real_failure_is_returned_as_structured_data(self):
         denied = HttpError(FakeResponse(403), b"forbidden")
 
-        with self.assertRaises(HttpError):
-            delete_event(FakeService(delete_error=denied), "evt-1")
+        result = delete_event(FakeService(delete_error=denied), "evt-1")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["status_code"], 403)
 
 
 class StartFormattingTests(unittest.TestCase):
