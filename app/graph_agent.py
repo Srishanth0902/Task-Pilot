@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field
 from app.calendar_tools import build_calendar_tools
 from app.config import TIMEZONE, WORKDAY_END_HOUR, WORKDAY_START_HOUR
 from app.date_utils import ensure_aware, format_local_datetime, format_local_range, local_now
+from app.observability import log_workflow, safe_error_detail
 from app.scheduling import (
     build_bulk_changes,
     day_window,
@@ -68,6 +69,7 @@ class CalendarAgentState(TypedDict, total=False):
     """Week 3 state contract shared by every graph node."""
 
     messages: Annotated[list[AnyMessage], add_messages]
+    thread_id: str
     user_query: str
     intent: Intent
     selected_event: dict | None
@@ -290,6 +292,51 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
     )
     tools = {tool.name: tool for tool in build_calendar_tools(service)}
 
+    def invoke_tool(state: CalendarAgentState, tool_name: str, args: dict):
+        context = {
+            "thread_id": state.get("thread_id"),
+            "intent": state.get("intent"),
+            "selected_tool": tool_name,
+        }
+        log_workflow("tool_input", **context, tool_input=args)
+        try:
+            result = tools[tool_name].invoke(args)
+        except Exception as error:
+            log_workflow("tool_error", **context, error=str(error))
+            raise
+        log_workflow("tool_output", **context, tool_output=result)
+        return result
+
+    def traced_node(name, handler):
+        def run(state: CalendarAgentState):
+            context = {
+                "thread_id": state.get("thread_id"),
+                "graph_node": name,
+                "intent": state.get("intent"),
+            }
+            log_workflow("graph_node_started", **context)
+            try:
+                result = handler(state)
+            except Exception as error:
+                log_workflow("graph_node_failed", **context, error=str(error))
+                raise
+            log_workflow(
+                "graph_node_finished",
+                **context,
+                resulting_intent=result.get("intent", state.get("intent")),
+                has_error=bool(result.get("error")),
+            )
+            if result.get("response"):
+                log_workflow(
+                    "final_response",
+                    thread_id=state.get("thread_id"),
+                    intent=result.get("intent", state.get("intent")),
+                    response=result["response"],
+                )
+            return result
+
+        return run
+
     def understand_query(state: CalendarAgentState):
         query = state["user_query"].strip()
         if not query:
@@ -333,7 +380,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             plan = _coerce_query_plan(raw)
         except Exception as error:
             return {
-                "error": f"Could not understand the request: {error}",
+                "error": f"Could not understand the request: {safe_error_detail(error)}",
                 "verified": False,
             }
 
@@ -406,6 +453,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return "detect_conflicts" if _action_ready(action) else "generate_response"
         if action.get("intent") == "update" and action.get("start_time"):
             return "detect_conflicts" if _action_ready(action) else "generate_response"
+        if action.get("intent") == "delete" and _action_ready(action):
+            return "request_confirmation"
         return "execute_action" if _action_ready(action) else "generate_response"
 
     def search_calendar(state: CalendarAgentState):
@@ -432,15 +481,19 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                     "time_min": args["time_min"],
                     "time_max": args["time_max"],
                 }
-                result = tools["list_calendar_events"].invoke(
+                result = invoke_tool(
+                    state,
+                    "list_calendar_events",
                     {key: value for key, value in list_args.items() if value is not None}
                 )
             else:
-                result = tools["search_calendar_events"].invoke(
+                result = invoke_tool(
+                    state,
+                    "search_calendar_events",
                     {key: value for key, value in args.items() if value is not None}
                 )
         except Exception as error:
-            return {"error": f"Calendar search failed: {error}"}
+            return {"error": f"Calendar search failed: {safe_error_detail(error)}"}
         if not result.get("success"):
             detail = result.get("error", "Unknown calendar error")
             return {"error": f"Calendar search failed: {detail}"}
@@ -485,7 +538,23 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 "clarification": f"I found {selected.get('title')} at "
                 f"{format_local_datetime(selected.get('start'))}. What time should I move it to?",
             }
-        return {"selected_event": selected, "pending_action": action}
+        result = {"selected_event": selected, "pending_action": action}
+        if action.get("intent") == "delete":
+            result.update(
+                {
+                    "affected_events": [selected],
+                    "proposed_changes": [
+                        {
+                            "action": "delete",
+                            "event_id": selected["event_id"],
+                            "title": selected.get("title"),
+                            "old_start": selected.get("start"),
+                            "old_end": selected.get("end"),
+                        }
+                    ],
+                }
+            )
+        return result
 
     def route_after_resolve(state: CalendarAgentState) -> str:
         if state.get("error"):
@@ -493,6 +562,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         if state.get("clarification"):
             return "generate_response"
         action = state.get("pending_action") or {}
+        if action.get("intent") == "delete":
+            return "request_confirmation"
         if action.get("intent") == "update" and action.get("start_time"):
             return "detect_conflicts"
         return "execute_action"
@@ -509,9 +580,11 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             "time_max": action["time_max"],
         }
         try:
-            result = tools["list_calendar_events"].invoke(args)
+            result = invoke_tool(state, "list_calendar_events", args)
         except Exception as error:
-            return {"error": f"Could not load the scheduling window: {error}"}
+            return {
+                "error": f"Could not load the scheduling window: {safe_error_detail(error)}"
+            }
         if not result.get("success"):
             return {"error": result.get("error", "Could not load calendar events.")}
         return {"tool_result": result, "candidate_events": result.get("events", [])}
@@ -591,7 +664,9 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             conflicts = []
             for change in changes:
                 try:
-                    window = tools["list_calendar_events"].invoke(
+                    window = invoke_tool(
+                        state,
+                        "list_calendar_events",
                         {
                             "max_results": 250,
                             "time_min": change["new_start"],
@@ -599,7 +674,9 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                         }
                     )
                 except Exception as error:
-                    return {"error": f"Bulk conflict check failed: {error}"}
+                    return {
+                        "error": f"Bulk conflict check failed: {safe_error_detail(error)}"
+                    }
                 if not window.get("success"):
                     return {"error": window.get("error", "Bulk conflict check failed.")}
                 matches = overlapping_events(
@@ -644,11 +721,13 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return {"error": f"Invalid event time: {error}"}
         day_start, day_end = day_window(start)
         try:
-            result = tools["list_calendar_events"].invoke(
+            result = invoke_tool(
+                state,
+                "list_calendar_events",
                 {"max_results": 250, "time_min": day_start, "time_max": day_end}
             )
         except Exception as error:
-            return {"error": f"Conflict check failed: {error}"}
+            return {"error": f"Conflict check failed: {safe_error_detail(error)}"}
         if not result.get("success"):
             return {"error": result.get("error", "Conflict check failed.")}
         excluded = {action["event_id"]} if action.get("event_id") else set()
@@ -696,7 +775,19 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         return "execute_action"
 
     def request_confirmation(state: CalendarAgentState):
-        changes = state.get("proposed_changes", [])
+        changes = list(state.get("proposed_changes", []))
+        action = state.get("pending_action") or {}
+        if not changes and action.get("intent") == "delete":
+            selected = state.get("selected_event") or {}
+            changes = [
+                {
+                    "action": "delete",
+                    "event_id": action.get("event_id"),
+                    "title": selected.get("title") or action.get("title") or "calendar event",
+                    "old_start": selected.get("start"),
+                    "old_end": selected.get("end"),
+                }
+            ]
         rows = []
         for index, change in enumerate(changes, start=1):
             if change["action"] == "delete":
@@ -728,11 +819,15 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         for change in state.get("proposed_changes", []):
             try:
                 if change["action"] == "delete":
-                    result = tools["delete_calendar_event"].invoke(
+                    result = invoke_tool(
+                        state,
+                        "delete_calendar_event",
                         {"event_id": change["event_id"]}
                     )
                 else:
-                    result = tools["update_calendar_event"].invoke(
+                    result = invoke_tool(
+                        state,
+                        "update_calendar_event",
                         {
                             "event_id": change["event_id"],
                             "start_time": change["new_start"],
@@ -740,7 +835,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                         }
                     )
             except Exception as error:
-                result = {"success": False, "error": str(error)}
+                result = {"success": False, "error": safe_error_detail(error)}
             results.append({"event_id": change.get("event_id"), **result})
         return {
             "tool_result": {
@@ -788,9 +883,9 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             if key in allowed and value is not None
         }
         try:
-            result = tools[tool_name].invoke(args)
+            result = invoke_tool(state, tool_name, args)
         except Exception as error:
-            return {"error": f"Calendar action failed: {error}"}
+            return {"error": f"Calendar action failed: {safe_error_detail(error)}"}
         return {"tool_result": result}
 
     def verify_result(state: CalendarAgentState):
@@ -887,19 +982,19 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         }
 
     workflow = StateGraph(CalendarAgentState)
-    workflow.add_node("understand_query", understand_query)
-    workflow.add_node("search_calendar", search_calendar)
-    workflow.add_node("resolve_event", resolve_event)
-    workflow.add_node("load_calendar_window", load_calendar_window)
-    workflow.add_node("find_free_slot", find_free_slot)
-    workflow.add_node("plan_bulk_operation", plan_bulk_operation)
-    workflow.add_node("detect_conflicts", detect_conflicts)
-    workflow.add_node("request_confirmation", request_confirmation)
-    workflow.add_node("execute_bulk_action", execute_bulk_action)
-    workflow.add_node("execute_action", execute_action)
-    workflow.add_node("verify_result", verify_result)
-    workflow.add_node("generate_response", generate_response)
-    workflow.add_node("handle_error", handle_error)
+    workflow.add_node("understand_query", traced_node("understand_query", understand_query))
+    workflow.add_node("search_calendar", traced_node("search_calendar", search_calendar))
+    workflow.add_node("resolve_event", traced_node("resolve_event", resolve_event))
+    workflow.add_node("load_calendar_window", traced_node("load_calendar_window", load_calendar_window))
+    workflow.add_node("find_free_slot", traced_node("find_free_slot", find_free_slot))
+    workflow.add_node("plan_bulk_operation", traced_node("plan_bulk_operation", plan_bulk_operation))
+    workflow.add_node("detect_conflicts", traced_node("detect_conflicts", detect_conflicts))
+    workflow.add_node("request_confirmation", traced_node("request_confirmation", request_confirmation))
+    workflow.add_node("execute_bulk_action", traced_node("execute_bulk_action", execute_bulk_action))
+    workflow.add_node("execute_action", traced_node("execute_action", execute_action))
+    workflow.add_node("verify_result", traced_node("verify_result", verify_result))
+    workflow.add_node("generate_response", traced_node("generate_response", generate_response))
+    workflow.add_node("handle_error", traced_node("handle_error", handle_error))
     workflow.add_edge(START, "understand_query")
     workflow.add_conditional_edges("understand_query", route_after_understand)
     workflow.add_conditional_edges("search_calendar", route_after_search)
@@ -931,8 +1026,13 @@ class CalendarConversation:
     def ask(self, query: str, *, thread_id: str = "default") -> CalendarAgentState:
         if not query.strip():
             raise ValueError("Calendar request cannot be empty.")
+        log_workflow("user_query", thread_id=thread_id, user_query=query)
         config = {"configurable": {"thread_id": thread_id}}
         return self.graph.invoke(
-            {"messages": [HumanMessage(content=query)], "user_query": query},
+            {
+                "messages": [HumanMessage(content=query)],
+                "user_query": query,
+                "thread_id": thread_id,
+            },
             config=config,
         )

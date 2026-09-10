@@ -140,7 +140,10 @@ def main():
                 _render_payload(message["payload"])
 
     if st.session_state.requires_confirmation:
-        st.warning("This action changes multiple events or creates a proposed free slot.")
+        st.warning(
+            "Review the proposed calendar change below. Nothing will be changed "
+            "until you confirm."
+        )
         yes_column, no_column = st.columns(2)
         if yes_column.button("Confirm", type="primary", use_container_width=True):
             _send_message(client, "yes")

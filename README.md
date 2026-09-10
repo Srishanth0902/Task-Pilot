@@ -1,369 +1,285 @@
-# Task-Pilot
+# Task Pilot
 
-An agentic calendar assistant that turns natural-language requests into safe,
-structured Google Calendar operations.
+Task Pilot is a stateful AI calendar assistant that turns natural-language
+requests into safe Google Calendar operations. It uses OpenRouter/Qwen for
+structured intent extraction, LangGraph for multi-step routing and memory,
+FastAPI for the backend, and Streamlit for the user interface.
 
-**Status:** Weeks 1-5 are complete. Task Pilot now has a tested FastAPI backend
-and Streamlit chat application around the live LangGraph, OpenRouter/Qwen, and
-Google Calendar workflow.
+**Project status:** Weeks 1–6 complete. Google OAuth, live Calendar CRUD,
+OpenRouter, advanced scheduling, the backend, and the UI have been verified.
 
-## Roadmap
+## Project overview
 
-| Week | Goal | Status |
-|---|---|---|
-| 1 | Project scaffold and Google Calendar CRUD | Live OAuth and CRUD verified |
-| 2 | Structured CRUD, Pydantic schemas, LangChain tools, relative dates | Implemented and offline-tested |
-| 3 | Stateful LangGraph workflow and follow-up context | Implemented and tested |
-| 4 | Bulk operations, conflicts, confirmations, and free slots | Implemented and live-tested |
-| 5 | FastAPI backend, Streamlit UI, and application testing | Implemented and live-tested |
+Task Pilot can understand requests such as “Move my DSA session tomorrow,”
+search for the right event, ask a follow-up question when required, check for
+conflicts, and execute the appropriate calendar operation. All application
+times are normalized to `Asia/Kolkata` and displayed as readable IST values.
+
+The application is designed around two safety rules:
+
+- Ambiguous requests never guess which event to change.
+- Deletes and bulk changes always show the affected events and require explicit
+  confirmation before a mutation tool runs.
+
+## Features
+
+- Create, list, search, update, and delete Google Calendar events.
+- Timezone-aware parsing for tomorrow, weekdays, next week, and relative hours.
+- Stateful follow-up conversations using LangGraph checkpoints.
+- Search-before-update and search-before-delete routing.
+- Ambiguous-event resolution without unsafe calendar changes.
+- Bulk rescheduling and deletion with confirmation.
+- Conflict detection with alternative time suggestions.
+- Free-slot discovery inside configurable working hours.
+- Structured FastAPI responses and a conversational Streamlit UI.
+- Rotating JSON workflow logs with secret redaction.
+- A 45-query evaluation dataset and five-metric scoring utility.
+- Offline unit tests, GitHub Actions CI, and Docker Compose deployment.
 
 ## Architecture
 
-```text
-Streamlit -> FastAPI -> LangGraph -> Calendar tools -> Google Calendar
-                         |
-                         +----------> OpenRouter / Qwen
-
-LangGraph:
-START -> Understand query -> Search needed?
-                              | yes            | no
-                              v                v
-                         Search event      Execute action
-                              |
-                              v
-                         Resolve event ----+
-                              |
-                              v
-                         Execute -> Verify -> Respond -> END
+```mermaid
+flowchart TD
+    UI[Streamlit UI] --> API[FastAPI]
+    API --> GRAPH[LangGraph agent]
+    GRAPH --> LLM[OpenRouter / Qwen]
+    GRAPH --> TOOLS[Validated LangChain tools]
+    TOOLS --> GCAL[Google Calendar API]
+    GRAPH --> LOGS[Redacted JSON logs]
 ```
 
-Neither the model nor the Google service is created at import time. Both are
-injected, which keeps the code provider-independent and makes the complete
-workflow testable using scripted fakes.
+```text
+START
+  → Understand query
+  → Determine intent
+  → Search calendar when needed
+  → Resolve zero, one, or multiple matches
+  → Check conflicts / prepare bulk plan
+  → Request confirmation for destructive actions
+  → Execute validated tool
+  → Verify structured result
+  → Generate response
+END
+```
+
+The Google client and LLM are initialized lazily. Test code injects scripted
+planners and fake Calendar clients, so the complete graph can be exercised
+without network calls or real calendar mutations.
+
+## Tech stack
+
+| Layer | Technology |
+|---|---|
+| Language | Python 3.12 |
+| Calendar | Google Calendar API + OAuth 2.0 |
+| LLM | Qwen3-30B-A3B through OpenRouter |
+| Agent workflow | LangGraph |
+| Tool layer | LangChain `StructuredTool` |
+| Validation | Pydantic 2 |
+| Backend | FastAPI + Uvicorn |
+| Frontend | Streamlit |
+| Testing | `unittest`, FastAPI TestClient, Streamlit AppTest |
+| Deployment | Docker Compose + GitHub Actions |
 
 ## Project structure
 
 ```text
 Task-Pilot/
-|-- app/
-|   |-- agent.py              # compatibility entry points for the graph
-|   |-- api.py                # FastAPI routes, schemas, and lazy shared runtime
-|   |-- api_client.py         # typed Streamlit-to-FastAPI HTTP client
-|   |-- graph_agent.py        # state, nodes, routing, memory, and conversation API
-|   |-- calendar_service.py   # Google OAuth and structured Calendar CRUD
-|   |-- calendar_tools.py     # five LangChain StructuredTool definitions
-|   |-- config.py             # environment-backed configuration
-|   |-- date_utils.py         # timezone-aware relative-date parsing
-|   |-- main.py               # live Google Calendar CRUD demonstration
-|   |-- chat.py               # one-shot or interactive stateful CLI
-|   |-- scheduling.py         # conflicts, gaps, and bulk-change planning
-|   `-- schemas.py            # Pydantic input contracts
-|-- tests/                    # offline service, schema, tool, date, and agent tests
-|-- streamlit_app.py          # chat UI, history, confirmations, event display
-|-- requirements.txt
-|-- .env.example
-|-- .gitignore
-`-- README.md
+├── app/
+│   ├── api.py                 # FastAPI routes and lazy runtime
+│   ├── calendar_service.py    # OAuth and Calendar CRUD
+│   ├── calendar_tools.py      # Validated LangChain tools
+│   ├── date_utils.py          # IST parsing and display
+│   ├── evaluation.py          # Dataset validation and metric scoring
+│   ├── graph_agent.py         # State, nodes, routing, and memory
+│   ├── llm.py                 # OpenRouter model construction
+│   ├── observability.py       # Structured redacted logging
+│   ├── scheduling.py          # Conflicts, free slots, and bulk plans
+│   └── schemas.py             # Pydantic tool inputs
+├── evaluation/
+│   ├── queries.json           # 45 realistic evaluation queries
+│   └── predictions.example.json
+├── tests/                     # Offline unit and regression tests
+├── deployment/README.md       # Container deployment notes
+├── streamlit_app.py
+├── Dockerfile.api
+├── Dockerfile.web
+├── docker-compose.yml
+└── requirements.txt
 ```
 
-## Week 2 functionality
-
-### Structured Calendar operations
-
-The functions in `app/calendar_service.py` all return dictionaries instead of
-raw Google resources. Successful create/update output follows this shape:
-
-```json
-{
-  "success": true,
-  "event_id": "abc123",
-  "title": "DSA Study",
-  "start": "2026-08-25T18:00:00+05:30",
-  "end": "2026-08-25T19:00:00+05:30",
-  "description": null,
-  "location": null,
-  "html_link": "https://calendar.google.com/...",
-  "status": "confirmed"
-}
-```
-
-Implemented operations:
-
-| Function | Purpose |
-|---|---|
-| `get_events()` | List upcoming events in chronological order |
-| `search_events()` | Search upcoming event text using Google's `q` parameter |
-| `create_event()` | Create a timezone-aware timed event |
-| `update_event()` | Patch only supplied fields |
-| `delete_event()` | Idempotently delete by event ID |
-
-API failures also return structured data with `success: false`, an error type,
-message, and HTTP status code when Google supplies one.
-
-### Pydantic schemas
-
-`app/schemas.py` defines:
-
-- `CreateEventInput`
-- `GetEventsInput`
-- `SearchEventInput`
-- `UpdateEventInput`
-- `DeleteEventInput`
-
-They validate required fields, event ranges, update semantics, result limits,
-and timezone handling. A missing create-event end time defaults to one hour
-after the start.
-
-### LangChain tools
-
-`build_calendar_tools(service)` returns five `StructuredTool` instances:
-
-- `create_calendar_event`
-- `list_calendar_events`
-- `search_calendar_events`
-- `update_calendar_event`
-- `delete_calendar_event`
-
-The service can be a real authenticated Google client or a fake one. The test
-suite also runs a complete agent loop with a scripted fake chat model, proving
-that LangChain can select and execute `create_calendar_event` without an API
-key.
-
-### Relative dates and timezone rules
-
-Internally, timed events always use timezone-aware ISO-8601 values. Supported
-input includes:
-
-- `tomorrow at 6 PM`
-- `next Monday at 9 AM`
-- `Friday at 6 PM`
-- `in two hours`
-- `next week`
-- ISO-8601, with or without an offset
-
-Naive ISO values are interpreted in `TIMEZONE`; aware values are converted to
-that timezone. A bare weekday always resolves to a future occurrence. `next
-week` means exactly seven days later and preserves the current local time unless
-a time is explicitly included.
-
-## Install and test offline
+## Installation
 
 PowerShell:
 
 ```powershell
+git clone https://github.com/Srishanth0902/Task-Pilot.git
+cd Task-Pilot
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python -m unittest discover -s tests -t . -v
+Copy-Item .env.example .env
 ```
 
-The tests do not need `credentials.json`, `token.json`, an OpenAI key, or any
-network access. They cover the Google request payloads, structured responses,
-schemas, all required date phrases, LangChain tool schemas, and a fake-model
-tool-selection loop.
+Set `OPENROUTER_API_KEY` in the local `.env` file. Never commit that file.
 
-## Week 3 LangGraph workflow
+## Google OAuth setup
 
-`app/graph_agent.py` defines `CalendarAgentState` with the requested fields:
-`messages`, `user_query`, `intent`, `selected_event`, `tool_result`, and
-`pending_action`. It also retains candidate events, clarification/error state,
-verification status, and the final response.
+1. Create a Google Cloud project.
+2. Enable the Google Calendar API.
+3. Configure the OAuth consent screen and add your account as a test user when
+   the application is in testing mode.
+4. Create an OAuth client with application type **Desktop app**.
+5. Download the client file as `credentials.json` into the project root.
+6. Run `python -m app.main` once and complete the browser consent flow.
 
-The compiled `StateGraph` contains these nodes:
+The app writes the resulting authorization to `token.json`. `.env`,
+`credentials.json`, and `token.json` are Git-ignored and excluded from Docker
+build contexts.
 
-- `understand_query`
-- `search_calendar`
-- `resolve_event`
-- `execute_action`
-- `verify_result`
-- `generate_response`
-- `handle_error`
+## Environment variables
 
-Update and delete requests without an event ID search first. One match proceeds;
-zero matches return safely; multiple matches preserve the candidates and ask the
-user to choose without changing the calendar. `InMemorySaver` checkpoints state
-under a conversation `thread_id`, so follow-up answers complete the pending
-action while retaining the selected event.
+| Variable | Default | Purpose |
+|---|---|---|
+| `GOOGLE_CREDENTIALS_FILE` | `credentials.json` | Desktop OAuth client path |
+| `GOOGLE_TOKEN_FILE` | `token.json` | Refreshable user token path |
+| `GOOGLE_CALENDAR_ID` | `primary` | Target calendar |
+| `TIMEZONE` | `Asia/Kolkata` | Internal and displayed timezone |
+| `WORKDAY_START_HOUR` | `8` | Free-slot search start |
+| `WORKDAY_END_HOUR` | `21` | Free-slot search end |
+| `OPENROUTER_API_KEY` | none | OpenRouter secret key |
+| `OPENROUTER_MODEL` | `qwen/qwen3-30b-a3b` | Switchable model slug |
+| `OPENROUTER_BASE_URL` | OpenRouter API | OpenAI-compatible endpoint |
+| `API_HOST` | `127.0.0.1` | FastAPI bind address |
+| `API_PORT` | `8000` | FastAPI port |
+| `TASK_PILOT_API_URL` | `http://127.0.0.1:8000` | UI backend URL |
+| `LOG_LEVEL` | `INFO` | Workflow log threshold |
+| `LOG_FILE` | `logs/task_pilot.jsonl` | Rotating JSON log path |
+| `LOG_MAX_BYTES` | `2000000` | Log rotation size |
+| `LOG_BACKUP_COUNT` | `3` | Retained rotated files |
 
-Start an interactive session to exercise follow-up context:
+## Running the application
 
-```powershell
-python -m app.chat
-```
-
-Example:
-
-```text
-You: Move my DSA session tomorrow
-Task Pilot: I found DSA session at 2026-09-11T18:00:00+05:30. What time should I move it to?
-You: 8 PM
-Task Pilot: Updated DSA session from 2026-09-11T20:00:00+05:30 to 2026-09-11T21:00:00+05:30.
-```
-
-## Week 4 advanced scheduling
-
-Bulk changes are planned separately from execution. The graph searches the
-requested time range, builds a complete list of affected events, displays every
-proposed update or deletion, and checkpoints that plan. Only an explicit `yes`
-on the same conversation thread reaches `execute_bulk_action`; `no` clears the
-plan without calling a mutation tool.
-
-Supported advanced requests include:
-
-- `Move all my study tasks from today to tomorrow.`
-- `Move all meetings tomorrow by 30 minutes.`
-- `Delete all cancelled events this week.`
-- `Move my study sessions to Monday.`
-- `Find a 2-hour free slot tomorrow and schedule DSA practice.`
-
-Before a single create or move, `detect_conflicts` loads that target day and
-uses half-open interval overlap checks. A conflict blocks execution and returns
-up to three available alternatives. Free-time scheduling merges overlapping
-busy periods, calculates gaps inside the configured working day, selects the
-earliest fitting slot, and asks for confirmation before creating anything.
-
-The default free-time window is 08:00-21:00 in `TIMEZONE`; override it with
-`WORKDAY_START_HOUR` and `WORKDAY_END_HOUR`.
-
-## Week 5 application
-
-The FastAPI backend exposes validated request and response contracts:
-
-| Endpoint | Purpose |
-|---|---|
-| `POST /chat` | Send a natural-language request or `yes`/`no` follow-up |
-| `GET /events` | Return upcoming structured calendar events |
-| `GET /health` | Report service configuration without contacting external APIs |
-
-`POST /chat` accepts:
-
-```json
-{
-  "message": "Move all meetings tomorrow by 30 minutes",
-  "thread_id": "optional-stable-conversation-id"
-}
-```
-
-When `thread_id` is omitted, the backend generates one and returns it. The
-Streamlit frontend retains that ID in session state so LangGraph confirmation
-and clarification turns resume the correct checkpoint. API initialization is
-lazy: `/health` never triggers OAuth, and `/events` does not require the LLM.
-
-The Streamlit interface includes chat history, a timed loading spinner,
-confirmation/cancel buttons, event and conflict displays, alternative slots,
-an upcoming-events sidebar, backend status checking, and a new-conversation
-control.
-
-### Run the complete application
-
-Install dependencies once:
-
-```powershell
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-```
-
-Start the backend in terminal 1:
+Terminal 1:
 
 ```powershell
 python -m uvicorn app.api:app --host 127.0.0.1 --port 8000
 ```
 
-Start the frontend in terminal 2:
+Terminal 2:
 
 ```powershell
 python -m streamlit run streamlit_app.py
 ```
 
-Open `http://localhost:8501`. Interactive API documentation is available at
-`http://127.0.0.1:8000/docs`.
+Open `http://localhost:8501`. API documentation is available at
+`http://127.0.0.1:8000/docs`, and configuration health is available at
+`http://127.0.0.1:8000/health`.
 
-## OpenRouter model configuration
+## Example queries
 
-The live model is constructed in `app/llm.py`. OpenRouter's OpenAI-compatible
-endpoint is accessed through `langchain-openai`, while the calendar agent stays
-provider-independent:
-
-```powershell
-python -m app.chat "Add ML study tomorrow at 6 PM"
+```text
+Add DSA tomorrow at 6 PM
+What is on my calendar tomorrow?
+Move my ML class to 8 PM
+Delete my gym session on Friday
+Move all study sessions tomorrow by 1 hour
+Find a 2-hour free slot tomorrow and schedule DSA practice
 ```
 
-Set `OPENROUTER_MODEL` to another tool-capable OpenRouter model to switch it
-without changing agent or calendar code.
+When several events match, Task Pilot asks which one. When a proposed create or
+move overlaps another event, it blocks the operation and offers alternatives.
 
-## Google Cloud setup (deferred live test)
+## Agent workflow and logging
 
-1. Create or select a project in the Google Cloud Console.
-2. Enable the Google Calendar API.
-3. Configure Google Auth Platform branding and audience.
-4. For an external app in Testing, add your Google account as a test user.
-5. Under Google Auth Platform > Clients, create a **Desktop app** client.
-6. Download it as `credentials.json` into the repository root.
-7. Run `python -m app.main` and approve access in the browser.
+Each conversation uses a stable `thread_id`. The logs record:
 
-The app writes the resulting OAuth token to `token.json`. Both files, along
-with `.env`, are excluded by `.gitignore` and must never be committed.
+```text
+User query → intent → graph node → selected tool → tool input
+           → tool output → verification → final response
+```
 
-The live demo reads upcoming events, creates `Agentic AI Project Work` tomorrow
-at 6 PM for one hour, reads the calendar again, and exercises update/delete on
-a throwaway event.
+Logs are newline-delimited JSON in `logs/task_pilot.jsonl`. They rotate
+automatically, stay outside Git, and redact API keys, OAuth tokens,
+authorization headers, passwords, and OpenRouter key patterns.
 
-## Configuration
+## Evaluation
 
-Copy `.env.example` to `.env` if you want to override defaults.
+`evaluation/queries.json` contains 45 realistic cases across CREATE, READ,
+UPDATE, DELETE, BULK_UPDATE, FREE_SLOT_SEARCH, AMBIGUOUS_REQUEST, CONFLICT, and
+FOLLOW_UP.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `GOOGLE_CREDENTIALS_FILE` | `credentials.json` | Desktop OAuth client file |
-| `GOOGLE_TOKEN_FILE` | `token.json` | Cached user authorization |
-| `GOOGLE_CALENDAR_ID` | `primary` | Calendar to operate on |
-| `TIMEZONE` | `Asia/Kolkata` | IANA timezone for event operations |
-| `WORKDAY_START_HOUR` | `8` | Earliest hour considered for free slots |
-| `WORKDAY_END_HOUR` | `21` | Latest boundary considered for free slots |
-| `OPENROUTER_API_KEY` | none | Secret API key; required for live LLM calls |
-| `OPENROUTER_MODEL` | `qwen/qwen3-30b-a3b` | Switchable OpenRouter model slug |
-| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API endpoint |
-| `API_HOST` | `127.0.0.1` | FastAPI bind host |
-| `API_PORT` | `8000` | FastAPI bind port |
-| `TASK_PILOT_API_URL` | `http://127.0.0.1:8000` | Backend URL used by Streamlit |
+Validate the dataset:
 
-## Live verification and remaining acceptance checks
+```powershell
+python -m app.evaluation
+```
 
-Verified on September 10, 2026:
+Score a prediction file:
 
-- OAuth sign-in and local token creation; credentials and token remain Git-ignored.
-- Reading the real calendar and searching for the created event.
-- Creating `Agentic AI Project Work` for September 11, 2026, 18:00-19:00 Asia/Kolkata,
-  reading it back, and confirming it in the Google Calendar browser interface.
-- Renaming and moving a temporary event, deleting it, and checking repeated deletion.
+```powershell
+python -m app.evaluation `
+  --predictions evaluation/predictions.example.json `
+  --output evaluation/results/latest.json
+```
 
-The calendar's display timezone is UTC, so the retained event appears as
-12:30-13:30 there: the same instant as 18:00-19:00 Asia/Kolkata.
+The report measures intent accuracy, tool accuracy, execution success, safety,
+and clarification quality. Missing predictions score as failures rather than
+being silently excluded.
 
-Also verified on September 10, 2026:
+## Testing
 
-- OpenRouter connectivity with `qwen/qwen3-30b-a3b`.
-- Live Qwen tool selection against a fake calendar before allowing a mutation.
-- `Add ML study tomorrow at 6 PM for one hour` through the real LLM, LangChain
-  agent, calendar tool, and Google Calendar API.
-- Live LLM selection and execution of all five tools: create, list, search,
-  update, and delete. The CRUD test used a disposable event and verified that
-  it was absent after deletion.
-- The resulting event was read back as September 11, 2026, 18:00-19:00
-  Asia/Kolkata. Google may return UTC timestamps; service responses normalize
-  them back to the configured timezone before the LLM sees them.
-- The Week 3 graph was exercised end to end with Qwen and the real calendar:
-  it created a disposable event, searched and selected it, paused an incomplete
-  move for a follow-up time, moved it while preserving its duration, deleted
-  it, and confirmed cleanup.
-- Week 4 was exercised with Qwen and the real calendar: two disposable events
-  were shown and bulk-shifted only after confirmation, then shown and
-  bulk-deleted after a second confirmation. A free slot was found and created
-  only after approval. A deliberately conflicting 6 PM request was blocked and
-  alternatives were returned. All disposable events were removed afterward.
-- Week 5 backend tests validate all three endpoints, request rejection, response
-  filtering, error translation, thread IDs, and lazy service isolation. The
-  real `/events` and `/chat` routes succeeded against Google Calendar and Qwen.
-  Uvicorn and Streamlit were each started as real local servers and returned
-  HTTP 200. Streamlit's simulated UI test also renders with no backend call or
-  application exception.
+The suite uses only fakes for mutations and can run without Google or OpenRouter
+credentials:
+
+```powershell
+python -m unittest discover -s tests -t . -v
+```
+
+Coverage includes Calendar API payloads and failures, Pydantic inputs,
+timezone parsing, agent routing, ambiguous queries, conflicts, bulk
+confirmations, follow-up memory, FastAPI, Streamlit, evaluation scoring,
+logging redaction, and destructive-action safety.
+
+## Screenshots
+
+The running interface is available at `http://localhost:8501`. It labels all
+times as IST and renders event ranges in plain English instead of exposing
+ISO-8601 timestamps. A calendar-populated screenshot is intentionally not
+committed because it could publish private event names or schedules. Add only a
+sanitized image under `docs/screenshots/` when preparing a public demo.
+
+## Security
+
+- Secrets and OAuth artifacts are excluded from Git and Docker images.
+- Logs redact known credential fields and secret patterns.
+- API messages and thread identifiers are length- and character-validated.
+- Tool schemas reject invalid ranges and incomplete updates.
+- All deletes and bulk mutations require an explicit confirmation turn.
+- Calendar errors return structured failures instead of partial success.
+- Containers run as an unprivileged user.
+
+## Deployment
+
+For the reference single-user deployment:
+
+```powershell
+docker compose up --build
+```
+
+The Compose stack runs FastAPI and Streamlit separately, waits for backend
+health, mounts OAuth files at runtime, and keeps logs in a persistent volume.
+See `deployment/README.md` for secret-storage and OAuth limitations.
+
+Public multi-user hosting requires web OAuth redirects and encrypted per-user
+token storage; the current Desktop OAuth flow is intentionally scoped to this
+single-user project.
+
+## Future improvements
+
+- Replace in-memory LangGraph checkpoints with PostgreSQL or Redis.
+- Add web OAuth and encrypted multi-user token storage.
+- Run the evaluation dataset automatically against configured model versions.
+- Add recurring-event editing and attendee management.
+- Add rate limiting, authentication, and distributed tracing for public use.
+- Migrate the frontend to React if richer calendar visualization is required.

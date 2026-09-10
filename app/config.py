@@ -57,6 +57,13 @@ TASK_PILOT_API_URL = os.getenv(
     "TASK_PILOT_API_URL", f"http://{API_HOST}:{API_PORT}"
 ).rstrip("/")
 
+# Structured JSON workflow logs. The directory is created lazily and ignored
+# by Git because calendar queries and titles can contain private information.
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper().strip()
+LOG_FILE = _resolve(os.getenv("LOG_FILE", "logs/task_pilot.jsonl"))
+LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", "2000000"))
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "3"))
+
 # Full calendar access: later weeks need to update and delete events, and
 # widening the scope after the fact would force every user to consent again.
 SCOPES = ["https://www.googleapis.com/auth/calendar"]

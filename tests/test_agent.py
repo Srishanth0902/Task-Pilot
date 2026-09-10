@@ -101,12 +101,17 @@ class LangGraphAgentTests(unittest.TestCase):
             QueryPlan(intent="delete", search_query="meeting")
         )
 
-        result = run_calendar_request(
-            "Delete my meeting tomorrow",
-            model=None,
-            service=service,
-            planner=planner,
+        conversation = CalendarConversation(None, service, planner=planner)
+        proposal = conversation.ask(
+            "Delete my meeting tomorrow", thread_id="confirm-single-delete"
         )
+
+        calls = service.events().calls
+        self.assertEqual([call[0] for call in calls], ["list"])
+        self.assertTrue(proposal["awaiting_confirmation"])
+        self.assertIn("Delete Project meeting", proposal["response"])
+
+        result = conversation.ask("yes", thread_id="confirm-single-delete")
 
         calls = service.events().calls
         self.assertEqual([call[0] for call in calls], ["list", "delete"])
@@ -186,13 +191,19 @@ class LangGraphAgentTests(unittest.TestCase):
         conversation = CalendarConversation(None, service, planner=planner)
         conversation.ask("Delete my meeting tomorrow", thread_id="choose-one")
 
-        result = conversation.ask("The one at 6 PM", thread_id="choose-one")
+        proposal = conversation.ask("The one at 6 PM", thread_id="choose-one")
+
+        self.assertTrue(proposal["awaiting_confirmation"])
+        self.assertIn("Delete Team meeting", proposal["response"])
+        self.assertNotIn("delete", [call[0] for call in service.events().calls])
+
+        result = conversation.ask("yes", thread_id="choose-one")
 
         delete_call = service.events().calls[-1]
         self.assertEqual(delete_call[0], "delete")
         self.assertEqual(delete_call[1]["eventId"], "meeting-2")
         self.assertEqual(result["response"], "Deleted Team meeting.")
-        self.assertEqual(len(result["messages"]), 4)
+        self.assertEqual(len(result["messages"]), 6)
 
     def test_followup_time_completes_a_pending_move_and_preserves_duration(self):
         service = FakeService(

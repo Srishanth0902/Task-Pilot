@@ -91,6 +91,20 @@ class FastAPIBackendTests(unittest.TestCase):
         self.assertEqual(response.status_code, 422)
         self.assertEqual(self.runtime.chat_calls, [])
 
+    def test_control_characters_are_rejected(self):
+        response = self.client.post("/chat", json={"message": "List\u0000events"})
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.runtime.chat_calls, [])
+
+    def test_unsafe_thread_identifier_is_rejected(self):
+        response = self.client.post(
+            "/chat", json={"message": "List events", "thread_id": "../other"}
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(self.runtime.chat_calls, [])
+
     def test_events_returns_structured_calendar_data(self):
         response = self.client.get(
             "/events",

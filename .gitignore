@@ -2,6 +2,15 @@
 .env
 credentials.json
 token.json
+logs/
+*.log
+
+# Evaluation output may contain model responses; the dataset itself is tracked.
+evaluation/results/
+
+# Local screenshot attempts can expose calendar contents. Publish only a
+# deliberately sanitized asset under a different reviewed filename.
+docs/screenshots/task-pilot*.png
 
 # ---- Python ----
 __pycache__/

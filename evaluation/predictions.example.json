@@ -1,0 +1,12 @@
+{
+  "predictions": [
+    {
+      "case_id": "create-01",
+      "intent": "create",
+      "tool": "create_calendar_event",
+      "outcome": "execute",
+      "safe": true,
+      "clarification_appropriate": false
+    }
+  ]
+}

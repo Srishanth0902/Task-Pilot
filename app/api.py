@@ -22,6 +22,7 @@ from app.config import (
 from app.date_utils import coerce_datetime
 from app.graph_agent import CalendarConversation
 from app.llm import create_openrouter_model
+from app.observability import safe_error_detail
 
 
 class HealthResponse(BaseModel):
@@ -44,6 +45,13 @@ class ChatRequest(BaseModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("message cannot be blank")
+        if "\x00" in stripped:
+            raise ValueError("message cannot contain null characters")
+        if any(
+            ord(character) < 32 and character not in "\n\r\t"
+            for character in stripped
+        ):
+            raise ValueError("message contains unsupported control characters")
         return stripped
 
     @field_validator("thread_id")
@@ -54,6 +62,10 @@ class ChatRequest(BaseModel):
         stripped = value.strip()
         if not stripped:
             raise ValueError("thread_id cannot be blank")
+        if not all(
+            character.isalnum() or character in "-_.:" for character in stripped
+        ):
+            raise ValueError("thread_id contains unsupported characters")
         return stripped
 
 
@@ -194,7 +206,9 @@ def create_app(runtime=None) -> FastAPI:
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except Exception as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+            raise HTTPException(
+                status_code=503, detail=safe_error_detail(error)
+            ) from error
         if not result.get("success"):
             raise HTTPException(
                 status_code=result.get("status_code", 502),
@@ -210,7 +224,9 @@ def create_app(runtime=None) -> FastAPI:
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         except Exception as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+            raise HTTPException(
+                status_code=503, detail=safe_error_detail(error)
+            ) from error
         return _chat_response(state, thread_id)
 
     return application
