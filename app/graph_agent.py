@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Literal, TypedDict
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage
@@ -21,10 +21,27 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 from app.calendar_tools import build_calendar_tools
-from app.config import TIMEZONE
-from app.date_utils import local_now
+from app.config import TIMEZONE, WORKDAY_END_HOUR, WORKDAY_START_HOUR
+from app.date_utils import ensure_aware, local_now
+from app.scheduling import (
+    build_bulk_changes,
+    day_window,
+    find_free_slots,
+    overlapping_events,
+    working_window,
+)
 
-Intent = Literal["create", "list", "search", "update", "delete", "unknown"]
+Intent = Literal[
+    "create",
+    "list",
+    "search",
+    "update",
+    "delete",
+    "bulk_update",
+    "bulk_delete",
+    "free_slot",
+    "unknown",
+]
 
 
 class QueryPlan(BaseModel):
@@ -40,6 +57,9 @@ class QueryPlan(BaseModel):
     time_max: str | None = None
     description: str | None = None
     location: str | None = None
+    shift_minutes: int | None = None
+    target_date: str | None = None
+    duration_minutes: int | None = Field(default=None, ge=1, le=1440)
     max_results: int = Field(default=10, ge=1, le=250)
     continue_previous: bool = False
 
@@ -58,6 +78,12 @@ class CalendarAgentState(TypedDict, total=False):
     error: str | None
     verified: bool
     response: str | None
+    affected_events: list[dict]
+    proposed_changes: list[dict]
+    conflict_events: list[dict]
+    alternatives: list[dict]
+    awaiting_confirmation: bool
+    confirmation_status: Literal["pending", "approved", "declined"] | None
 
 
 def calendar_planner_prompt() -> str:
@@ -79,6 +105,16 @@ Rules:
 - Prior pending state and candidates are included below. If this message answers
   that question, set continue_previous=true and preserve/complete that action.
 - If candidates are shown and the user identifies one, copy its exact event_id.
+- Use bulk_update for requests affecting every matching event. Set search_query,
+  time_min/time_max, and either shift_minutes or target_date (YYYY-MM-DD).
+  Moving today to tomorrow means shift_minutes=1440. Moving events "by 30
+  minutes" means shift_minutes=30.
+- Use bulk_delete for deleting every matching event and provide the same search
+  and date bounds. Bulk actions are only plans until the graph gets confirmation.
+- Use free_slot when asked to find availability and schedule something. Supply
+  title, duration_minutes, and the requested day's time_min/time_max. The graph
+  uses the configured {WORKDAY_START_HOUR:02d}:00-{WORKDAY_END_HOUR:02d}:00
+  local scheduling window and asks before creating.
 """
 
 
@@ -86,6 +122,27 @@ def _action_from_plan(plan: QueryPlan) -> dict:
     values = plan.model_dump(exclude_none=True)
     values.pop("continue_previous", None)
     return values
+
+
+def _coerce_query_plan(raw) -> QueryPlan:
+    """Normalize standard and provider-quirky structured model responses."""
+    if isinstance(raw, QueryPlan):
+        return raw
+    if isinstance(raw, dict) and "parsed" in raw:
+        if raw.get("parsed") is not None:
+            parsed = raw["parsed"]
+            return parsed if isinstance(parsed, QueryPlan) else QueryPlan.model_validate(parsed)
+        message = raw.get("raw")
+        for call in getattr(message, "tool_calls", []) or []:
+            name = call.get("name")
+            if name in {
+                "create", "list", "search", "update", "delete",
+                "bulk_update", "bulk_delete", "free_slot", "unknown",
+            }:
+                return QueryPlan.model_validate({"intent": name, **call.get("args", {})})
+        parsing_error = raw.get("parsing_error")
+        raise ValueError(str(parsing_error or "Model returned an invalid query plan."))
+    return QueryPlan.model_validate(raw)
 
 
 def _clock_from_text(text: str) -> tuple[int, int] | None:
@@ -102,6 +159,11 @@ def _clock_from_text(text: str) -> tuple[int, int] | None:
         return None
     hour = hour % 12 + (12 if match.group("period").lower() == "pm" else 0)
     return hour, minute
+
+
+def _plan_datetime(value: str) -> datetime:
+    """Parse and localize a planner-produced ISO datetime."""
+    return ensure_aware(datetime.fromisoformat(value))
 
 
 def _select_candidate(query: str, candidates: list[dict], event_id: str | None):
@@ -132,13 +194,12 @@ def _select_candidate(query: str, candidates: list[dict], event_id: str | None):
 
 
 def _apply_followup_time(action: dict, selected_event: dict | None, query: str):
-    if action.get("intent") != "update" or action.get("start_time"):
-        return
-    if not selected_event:
+    if action.get("intent") not in {"create", "update"} or action.get("start_time"):
         return
     clock = _clock_from_text(query)
-    old_start = selected_event.get("start")
-    old_end = selected_event.get("end")
+    source = selected_event or {}
+    old_start = source.get("start") or action.get("previous_start")
+    old_end = source.get("end") or action.get("previous_end")
     if not clock or not old_start or not old_end or "T" not in old_start:
         return
     start = datetime.fromisoformat(old_start).replace(
@@ -147,6 +208,15 @@ def _apply_followup_time(action: dict, selected_event: dict | None, query: str):
     duration = datetime.fromisoformat(old_end) - datetime.fromisoformat(old_start)
     action["start_time"] = start.isoformat()
     action["end_time"] = (start + duration).isoformat()
+
+
+def _confirmation_value(query: str) -> bool | None:
+    text = re.sub(r"[^a-z ]", "", query.casefold()).strip()
+    if text in {"yes", "y", "confirm", "confirmed", "proceed", "do it", "go ahead"}:
+        return True
+    if text in {"no", "n", "cancel", "stop", "never mind", "nevermind"}:
+        return False
+    return None
 
 
 def _needs_search(action: dict) -> bool:
@@ -174,12 +244,12 @@ def _action_ready(action: dict) -> bool:
 
 
 def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
-    """Compile the Week 3 graph around an LLM and calendar service."""
+    """Compile the stateful Week 3/4 graph around an LLM and calendar service."""
     if model is None and planner is None:
         raise ValueError("A LangChain-compatible chat model must be supplied.")
 
     structured_planner = planner or model.with_structured_output(
-        QueryPlan, method="function_calling"
+        QueryPlan, method="function_calling", include_raw=True
     )
     tools = {tool.name: tool for tool in build_calendar_tools(service)}
 
@@ -187,10 +257,31 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         query = state["user_query"].strip()
         if not query:
             return {"error": "Calendar request cannot be empty."}
+        if state.get("awaiting_confirmation"):
+            decision = _confirmation_value(query)
+            if decision is None:
+                return {
+                    "clarification": "Please answer yes to proceed or no to cancel.",
+                    "confirmation_status": "pending",
+                    "error": None,
+                }
+            return {
+                "intent": (state.get("pending_action") or {}).get(
+                    "intent", state.get("intent", "unknown")
+                ),
+                "awaiting_confirmation": False,
+                "confirmation_status": "approved" if decision else "declined",
+                "clarification": None,
+                "error": None,
+                "verified": False,
+                "tool_result": None,
+            }
         context = {
             "pending_action": state.get("pending_action"),
             "selected_event": state.get("selected_event"),
             "candidate_events": state.get("candidate_events", []),
+            "conflict_events": state.get("conflict_events", []),
+            "alternatives": state.get("alternatives", []),
         }
         try:
             raw = structured_planner.invoke(
@@ -202,7 +293,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                     ),
                 ]
             )
-            plan = raw if isinstance(raw, QueryPlan) else QueryPlan.model_validate(raw)
+            plan = _coerce_query_plan(raw)
         except Exception as error:
             return {"error": f"Could not understand the request: {error}"}
 
@@ -235,18 +326,42 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             "error": None,
             "verified": False,
             "response": None,
+            "affected_events": [],
+            "proposed_changes": [],
+            "conflict_events": [],
+            "alternatives": [],
+            "awaiting_confirmation": False,
+            "confirmation_status": None,
         }
 
     def route_after_understand(state: CalendarAgentState) -> str:
         if state.get("error"):
             return "handle_error"
         action = state.get("pending_action") or {}
+        if state.get("confirmation_status") == "declined":
+            return "generate_response"
+        if state.get("confirmation_status") == "approved":
+            if action.get("intent") in {"bulk_update", "bulk_delete"}:
+                return "execute_bulk_action"
+            if action.get("intent") in {"create", "update"} and action.get("start_time"):
+                return "detect_conflicts"
+            return "execute_action"
+        if state.get("awaiting_confirmation") or state.get("clarification"):
+            return "generate_response"
         if action.get("intent") == "unknown":
             return "generate_response"
+        if action.get("intent") in {"bulk_update", "bulk_delete"}:
+            return "search_calendar"
+        if action.get("intent") == "free_slot":
+            return "load_calendar_window"
         if state.get("candidate_events") and action.get("intent") in {"update", "delete"}:
             return "resolve_event"
         if _needs_search(action):
             return "search_calendar"
+        if action.get("intent") == "create":
+            return "detect_conflicts" if _action_ready(action) else "generate_response"
+        if action.get("intent") == "update" and action.get("start_time"):
+            return "detect_conflicts" if _action_ready(action) else "generate_response"
         return "execute_action" if _action_ready(action) else "generate_response"
 
     def search_calendar(state: CalendarAgentState):
@@ -256,7 +371,11 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return {"clarification": "Which event should I find?"}
         args = {
             "query": query,
-            "max_results": action.get("max_results", 10),
+            "max_results": (
+                250
+                if action.get("intent") in {"bulk_update", "bulk_delete"}
+                else action.get("max_results", 10)
+            ),
             "time_min": action.get("time_min"),
             "time_max": action.get("time_max"),
         }
@@ -275,6 +394,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return "handle_error"
         if state.get("clarification"):
             return "generate_response"
+        if state.get("intent") in {"bulk_update", "bulk_delete"}:
+            return "plan_bulk_operation"
         return "resolve_event"
 
     def resolve_event(state: CalendarAgentState):
@@ -314,7 +435,262 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return "handle_error"
         if state.get("clarification"):
             return "generate_response"
+        action = state.get("pending_action") or {}
+        if action.get("intent") == "update" and action.get("start_time"):
+            return "detect_conflicts"
         return "execute_action"
+
+    def load_calendar_window(state: CalendarAgentState):
+        action = dict(state.get("pending_action") or {})
+        if not action.get("time_min") or not action.get("time_max"):
+            return {
+                "clarification": "Which day or time range should I search for a free slot?"
+            }
+        args = {
+            "max_results": 250,
+            "time_min": action["time_min"],
+            "time_max": action["time_max"],
+        }
+        try:
+            result = tools["list_calendar_events"].invoke(args)
+        except Exception as error:
+            return {"error": f"Could not load the scheduling window: {error}"}
+        if not result.get("success"):
+            return {"error": result.get("error", "Could not load calendar events.")}
+        return {"tool_result": result, "candidate_events": result.get("events", [])}
+
+    def route_after_window_load(state: CalendarAgentState) -> str:
+        if state.get("error"):
+            return "handle_error"
+        if state.get("clarification"):
+            return "generate_response"
+        return "find_free_slot"
+
+    def find_free_slot(state: CalendarAgentState):
+        action = dict(state.get("pending_action") or {})
+        if not action.get("title"):
+            return {"clarification": "What should I call the event?"}
+        duration_minutes = action.get("duration_minutes")
+        if not duration_minutes:
+            return {"clarification": "How long should the event be?"}
+        try:
+            requested_start = _plan_datetime(action["time_min"])
+            requested_end = _plan_datetime(action["time_max"])
+        except ValueError as error:
+            return {"error": f"Invalid free-slot time range: {error}"}
+        work_start, work_end = working_window(requested_start)
+        window_start = max(requested_start, work_start)
+        window_end = min(requested_end, work_end)
+        if window_end <= window_start:
+            return {
+                "clarification": "The requested range does not overlap the configured working hours."
+            }
+        slots = find_free_slots(
+            state.get("candidate_events", []),
+            window_start,
+            window_end,
+            timedelta(minutes=duration_minutes),
+            limit=3,
+        )
+        if not slots:
+            return {"clarification": "I could not find a suitable free slot in that window."}
+        chosen = slots[0]
+        create_action = {
+            "intent": "create",
+            "title": action["title"],
+            "start_time": chosen["start"],
+            "end_time": chosen["end"],
+            "description": action.get("description"),
+            "location": action.get("location"),
+        }
+        return {
+            "intent": "create",
+            "pending_action": create_action,
+            "alternatives": slots,
+            "proposed_changes": [
+                {
+                    "action": "create",
+                    "title": action["title"],
+                    "new_start": chosen["start"],
+                    "new_end": chosen["end"],
+                }
+            ],
+        }
+
+    def plan_bulk_operation(state: CalendarAgentState):
+        action = dict(state.get("pending_action") or {})
+        events = state.get("candidate_events", [])
+        if not events:
+            return {"clarification": "I found no events affected by that bulk request."}
+        try:
+            changes = build_bulk_changes(events, action)
+        except (TypeError, ValueError) as error:
+            return {"clarification": str(error)}
+        if not changes:
+            return {"clarification": "I found no timed events that can be changed."}
+
+        if action.get("intent") == "bulk_update":
+            affected_ids = {change["event_id"] for change in changes}
+            conflicts = []
+            for change in changes:
+                try:
+                    window = tools["list_calendar_events"].invoke(
+                        {
+                            "max_results": 250,
+                            "time_min": change["new_start"],
+                            "time_max": change["new_end"],
+                        }
+                    )
+                except Exception as error:
+                    return {"error": f"Bulk conflict check failed: {error}"}
+                if not window.get("success"):
+                    return {"error": window.get("error", "Bulk conflict check failed.")}
+                matches = overlapping_events(
+                    window.get("events", []),
+                    datetime.fromisoformat(change["new_start"]),
+                    datetime.fromisoformat(change["new_end"]),
+                    exclude_event_ids=affected_ids,
+                )
+                conflicts.extend(matches)
+            if conflicts:
+                names = ", ".join(dict.fromkeys(event.get("title") for event in conflicts))
+                return {
+                    "affected_events": events,
+                    "proposed_changes": changes,
+                    "conflict_events": conflicts,
+                    "clarification": f"The bulk move would conflict with: {names}. "
+                    "Please choose a different shift or target date.",
+                }
+
+        return {"affected_events": events, "proposed_changes": changes}
+
+    def route_after_planning(state: CalendarAgentState) -> str:
+        if state.get("error"):
+            return "handle_error"
+        if state.get("clarification"):
+            return "generate_response"
+        return "request_confirmation"
+
+    def detect_conflicts(state: CalendarAgentState):
+        action = dict(state.get("pending_action") or {})
+        start_text = action.get("start_time")
+        if not start_text:
+            return {"clarification": "What start time should I use?"}
+        try:
+            start = _plan_datetime(start_text)
+            end = (
+                _plan_datetime(action["end_time"])
+                if action.get("end_time")
+                else start + timedelta(hours=1)
+            )
+        except ValueError as error:
+            return {"error": f"Invalid event time: {error}"}
+        day_start, day_end = day_window(start)
+        try:
+            result = tools["list_calendar_events"].invoke(
+                {"max_results": 250, "time_min": day_start, "time_max": day_end}
+            )
+        except Exception as error:
+            return {"error": f"Conflict check failed: {error}"}
+        if not result.get("success"):
+            return {"error": result.get("error", "Conflict check failed.")}
+        excluded = {action["event_id"]} if action.get("event_id") else set()
+        conflicts = overlapping_events(
+            result.get("events", []), start, end, exclude_event_ids=excluded
+        )
+        if not conflicts:
+            return {"conflict_events": [], "alternatives": []}
+
+        window_start, window_end = working_window(start)
+        alternative_start = max(end, window_start)
+        alternatives = (
+            find_free_slots(
+                result.get("events", []),
+                alternative_start,
+                window_end,
+                end - start,
+                limit=3,
+                exclude_event_ids=excluded,
+            )
+            if alternative_start < window_end
+            else []
+        )
+        conflict_names = ", ".join(event.get("title") for event in conflicts)
+        options = ", ".join(slot["start"] for slot in alternatives) or "none that day"
+        action["previous_start"] = start.isoformat()
+        action["previous_end"] = end.isoformat()
+        action.pop("start_time", None)
+        action.pop("end_time", None)
+        return {
+            "pending_action": action,
+            "conflict_events": conflicts,
+            "alternatives": alternatives,
+            "clarification": f"That time conflicts with {conflict_names}. "
+            f"Available alternatives: {options}. Which time should I use?",
+        }
+
+    def route_after_conflict_check(state: CalendarAgentState) -> str:
+        if state.get("error"):
+            return "handle_error"
+        if state.get("clarification"):
+            return "generate_response"
+        return "execute_action"
+
+    def request_confirmation(state: CalendarAgentState):
+        changes = state.get("proposed_changes", [])
+        rows = []
+        for index, change in enumerate(changes, start=1):
+            if change["action"] == "delete":
+                rows.append(f"{index}. Delete {change.get('title')} at {change.get('old_start')}")
+            elif change["action"] == "update":
+                rows.append(
+                    f"{index}. Move {change.get('title')} from {change.get('old_start')} "
+                    f"to {change.get('new_start')}"
+                )
+            else:
+                rows.append(
+                    f"{index}. Create {change.get('title')} from {change.get('new_start')} "
+                    f"to {change.get('new_end')}"
+                )
+        text = "Proposed changes:\n" + "\n".join(rows) + "\nProceed? (yes/no)"
+        return {
+            "messages": [AIMessage(content=text)],
+            "response": text,
+            "awaiting_confirmation": True,
+            "confirmation_status": "pending",
+        }
+
+    def execute_bulk_action(state: CalendarAgentState):
+        results = []
+        for change in state.get("proposed_changes", []):
+            try:
+                if change["action"] == "delete":
+                    result = tools["delete_calendar_event"].invoke(
+                        {"event_id": change["event_id"]}
+                    )
+                else:
+                    result = tools["update_calendar_event"].invoke(
+                        {
+                            "event_id": change["event_id"],
+                            "start_time": change["new_start"],
+                            "end_time": change["new_end"],
+                        }
+                    )
+            except Exception as error:
+                result = {"success": False, "error": str(error)}
+            results.append({"event_id": change.get("event_id"), **result})
+        return {
+            "tool_result": {
+                "success": bool(results) and all(item.get("success") for item in results),
+                "count": len(results),
+                "error": (
+                    None
+                    if all(item.get("success") for item in results)
+                    else "One or more bulk changes failed; inspect the individual results."
+                ),
+                "results": results,
+            }
+        }
 
     def execute_action(state: CalendarAgentState):
         action = dict(state.get("pending_action") or {})
@@ -374,7 +750,10 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         clarification = state.get("clarification")
         result = state.get("tool_result") or {}
         intent = state.get("intent")
-        if clarification:
+        if state.get("confirmation_status") == "declined":
+            text = "Cancelled. No calendar events were changed."
+            clear = True
+        elif clarification:
             text = clarification
             clear = False
         elif intent == "unknown":
@@ -411,6 +790,10 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             title = event.get("title") or result.get("event_id")
             text = f"Deleted {title}." if result.get("deleted") else f"{title} was already absent."
             clear = True
+        elif intent in {"bulk_update", "bulk_delete"}:
+            verb = "updated" if intent == "bulk_update" else "deleted"
+            text = f"Successfully {verb} {result.get('count', 0)} events."
+            clear = True
         else:
             verb = "Created" if intent == "create" else "Updated"
             text = (
@@ -424,6 +807,10 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             "pending_action": None if clear else state.get("pending_action"),
             "selected_event": None if clear else state.get("selected_event"),
             "candidate_events": [] if clear else state.get("candidate_events", []),
+            "affected_events": [] if clear else state.get("affected_events", []),
+            "proposed_changes": [] if clear else state.get("proposed_changes", []),
+            "awaiting_confirmation": False if clear else state.get("awaiting_confirmation", False),
+            "confirmation_status": None if clear else state.get("confirmation_status"),
         }
 
     def handle_error(state: CalendarAgentState):
@@ -434,6 +821,12 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
     workflow.add_node("understand_query", understand_query)
     workflow.add_node("search_calendar", search_calendar)
     workflow.add_node("resolve_event", resolve_event)
+    workflow.add_node("load_calendar_window", load_calendar_window)
+    workflow.add_node("find_free_slot", find_free_slot)
+    workflow.add_node("plan_bulk_operation", plan_bulk_operation)
+    workflow.add_node("detect_conflicts", detect_conflicts)
+    workflow.add_node("request_confirmation", request_confirmation)
+    workflow.add_node("execute_bulk_action", execute_bulk_action)
     workflow.add_node("execute_action", execute_action)
     workflow.add_node("verify_result", verify_result)
     workflow.add_node("generate_response", generate_response)
@@ -442,6 +835,12 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
     workflow.add_conditional_edges("understand_query", route_after_understand)
     workflow.add_conditional_edges("search_calendar", route_after_search)
     workflow.add_conditional_edges("resolve_event", route_after_resolve)
+    workflow.add_conditional_edges("load_calendar_window", route_after_window_load)
+    workflow.add_conditional_edges("find_free_slot", route_after_planning)
+    workflow.add_conditional_edges("plan_bulk_operation", route_after_planning)
+    workflow.add_conditional_edges("detect_conflicts", route_after_conflict_check)
+    workflow.add_edge("request_confirmation", END)
+    workflow.add_edge("execute_bulk_action", "verify_result")
     workflow.add_edge("execute_action", "verify_result")
     workflow.add_conditional_edges("verify_result", route_after_verify)
     workflow.add_edge("generate_response", END)

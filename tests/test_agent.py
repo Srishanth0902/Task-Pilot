@@ -47,6 +47,12 @@ class LangGraphAgentTests(unittest.TestCase):
                 "verify_result",
                 "generate_response",
                 "handle_error",
+                "load_calendar_window",
+                "find_free_slot",
+                "plan_bulk_operation",
+                "detect_conflicts",
+                "request_confirmation",
+                "execute_bulk_action",
             }.issubset(graph.get_graph().nodes)
         )
 
@@ -67,7 +73,9 @@ class LangGraphAgentTests(unittest.TestCase):
             planner=planner,
         )
 
-        self.assertEqual(service.events().calls[0][0], "insert")
+        self.assertEqual(
+            [call[0] for call in service.events().calls], ["list", "insert"]
+        )
         self.assertTrue(result["verified"])
         self.assertEqual(result["intent"], "create")
         self.assertEqual(result["user_query"], "Add ML study tomorrow at 6 PM")

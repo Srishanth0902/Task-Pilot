@@ -3,8 +3,9 @@
 An agentic calendar assistant that turns natural-language requests into safe,
 structured Google Calendar operations.
 
-**Status:** Weeks 1-3 are complete. The live Google Calendar integration and
-OpenRouter/Qwen model now run through a stateful, conditional LangGraph agent.
+**Status:** Weeks 1-4 are complete. The live Google Calendar integration and
+OpenRouter/Qwen model run through a stateful LangGraph agent with guarded bulk
+operations, conflict handling, and free-time scheduling.
 
 ## Roadmap
 
@@ -13,7 +14,7 @@ OpenRouter/Qwen model now run through a stateful, conditional LangGraph agent.
 | 1 | Project scaffold and Google Calendar CRUD | Live OAuth and CRUD verified |
 | 2 | Structured CRUD, Pydantic schemas, LangChain tools, relative dates | Implemented and offline-tested |
 | 3 | Stateful LangGraph workflow and follow-up context | Implemented and tested |
-| 4 | Multi-step reasoning | Planned |
+| 4 | Bulk operations, conflicts, confirmations, and free slots | Implemented and live-tested |
 | 5 | Interface and polish | Planned |
 
 ## Architecture
@@ -48,6 +49,7 @@ Task-Pilot/
 |   |-- date_utils.py         # timezone-aware relative-date parsing
 |   |-- main.py               # live Google Calendar CRUD demonstration
 |   |-- chat.py               # one-shot or interactive stateful CLI
+|   |-- scheduling.py         # conflicts, gaps, and bulk-change planning
 |   `-- schemas.py            # Pydantic input contracts
 |-- tests/                    # offline service, schema, tool, date, and agent tests
 |-- requirements.txt
@@ -190,6 +192,31 @@ You: 8 PM
 Task Pilot: Updated DSA session from 2026-09-11T20:00:00+05:30 to 2026-09-11T21:00:00+05:30.
 ```
 
+## Week 4 advanced scheduling
+
+Bulk changes are planned separately from execution. The graph searches the
+requested time range, builds a complete list of affected events, displays every
+proposed update or deletion, and checkpoints that plan. Only an explicit `yes`
+on the same conversation thread reaches `execute_bulk_action`; `no` clears the
+plan without calling a mutation tool.
+
+Supported advanced requests include:
+
+- `Move all my study tasks from today to tomorrow.`
+- `Move all meetings tomorrow by 30 minutes.`
+- `Delete all cancelled events this week.`
+- `Move my study sessions to Monday.`
+- `Find a 2-hour free slot tomorrow and schedule DSA practice.`
+
+Before a single create or move, `detect_conflicts` loads that target day and
+uses half-open interval overlap checks. A conflict blocks execution and returns
+up to three available alternatives. Free-time scheduling merges overlapping
+busy periods, calculates gaps inside the configured working day, selects the
+earliest fitting slot, and asks for confirmation before creating anything.
+
+The default free-time window is 08:00-21:00 in `TIMEZONE`; override it with
+`WORKDAY_START_HOUR` and `WORKDAY_END_HOUR`.
+
 ## OpenRouter model configuration
 
 The live model is constructed in `app/llm.py`. OpenRouter's OpenAI-compatible
@@ -230,6 +257,8 @@ Copy `.env.example` to `.env` if you want to override defaults.
 | `GOOGLE_TOKEN_FILE` | `token.json` | Cached user authorization |
 | `GOOGLE_CALENDAR_ID` | `primary` | Calendar to operate on |
 | `TIMEZONE` | `Asia/Kolkata` | IANA timezone for event operations |
+| `WORKDAY_START_HOUR` | `8` | Earliest hour considered for free slots |
+| `WORKDAY_END_HOUR` | `21` | Latest boundary considered for free slots |
 | `OPENROUTER_API_KEY` | none | Secret API key; required for live LLM calls |
 | `OPENROUTER_MODEL` | `qwen/qwen3-30b-a3b` | Switchable OpenRouter model slug |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API endpoint |
@@ -263,3 +292,8 @@ Also verified on September 10, 2026:
   it created a disposable event, searched and selected it, paused an incomplete
   move for a follow-up time, moved it while preserving its duration, deleted
   it, and confirmed cleanup.
+- Week 4 was exercised with Qwen and the real calendar: two disposable events
+  were shown and bulk-shifted only after confirmation, then shown and
+  bulk-deleted after a second confirmation. A free slot was found and created
+  only after approval. A deliberately conflicting 6 PM request was blocked and
+  alternatives were returned. All disposable events were removed afterward.

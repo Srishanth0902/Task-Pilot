@@ -34,6 +34,14 @@ CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 # IANA timezone used when creating events.
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 
+# Bounds used by Week 4 free-time discovery and conflict alternatives.
+WORKDAY_START_HOUR = int(os.getenv("WORKDAY_START_HOUR", "8"))
+WORKDAY_END_HOUR = int(os.getenv("WORKDAY_END_HOUR", "21"))
+if not 0 <= WORKDAY_START_HOUR < WORKDAY_END_HOUR <= 23:
+    raise ValueError(
+        "WORKDAY_START_HOUR and WORKDAY_END_HOUR must satisfy 0 <= start < end <= 23."
+    )
+
 # Live LLM provider. Keeping the model slug in configuration makes switching
 # among OpenRouter models a one-line .env change.
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
