@@ -19,3 +19,5 @@ jobs:
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -t . -v
       - run: python -m app.evaluation
+      - run: docker build --file Dockerfile.api --tag task-pilot-api:ci .
+      - run: docker build --file Dockerfile.web --tag task-pilot-web:ci .
