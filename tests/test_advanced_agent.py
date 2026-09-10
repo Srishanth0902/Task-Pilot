@@ -25,6 +25,65 @@ def event(event_id, title, start, end):
 
 
 class AdvancedAgentTests(unittest.TestCase):
+    def test_explicit_user_clock_overrides_model_utc_clock(self):
+        service = FakeService()
+        conversation = CalendarConversation(
+            None,
+            service,
+            planner=Planner(
+                QueryPlan(
+                    intent="create",
+                    title="yoga",
+                    start_time="2026-09-11T07:00:00Z",
+                    end_time="2026-09-11T08:00:00Z",
+                )
+            ),
+        )
+
+        result = conversation.ask(
+            "Tomorrow I need to do yoga at 7 AM for 1 hour",
+            thread_id="explicit-ist",
+        )
+
+        insert = [call for call in service.events().calls if call[0] == "insert"][-1]
+        self.assertEqual(
+            insert[1]["body"]["start"]["dateTime"],
+            "2026-09-11T07:00:00+05:30",
+        )
+        self.assertEqual(
+            result["response"],
+            "Created yoga — Friday, 11 September 2026, 7:00 AM–8:00 AM IST.",
+        )
+
+    def test_delete_all_tasks_lists_every_event_before_confirmation(self):
+        service = FakeService(
+            list_result={
+                "items": [
+                    event(
+                        "yoga-1",
+                        "yoga",
+                        "2026-09-11T07:00:00+05:30",
+                        "2026-09-11T08:00:00+05:30",
+                    )
+                ]
+            }
+        )
+        conversation = CalendarConversation(
+            None,
+            service,
+            planner=Planner(QueryPlan(intent="bulk_delete", search_query="tasks")),
+        )
+
+        proposal = conversation.ask("Remove all the tasks", thread_id="delete-all")
+
+        list_calls = [call for call in service.events().calls if call[0] == "list"]
+        self.assertEqual(len(list_calls), 1)
+        self.assertNotIn("q", list_calls[0][1])
+        self.assertTrue(proposal["awaiting_confirmation"])
+        self.assertEqual(len(proposal["affected_events"]), 1)
+        self.assertIn("Delete yoga", proposal["response"])
+        self.assertNotIn("delete", [name for name, _ in service.events().calls])
+
     def test_provider_specific_intent_tool_call_is_normalised(self):
         plan = _coerce_query_plan(
             {

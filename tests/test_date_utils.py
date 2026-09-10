@@ -2,7 +2,11 @@ import unittest
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from app.date_utils import parse_datetime_expression
+from app.date_utils import (
+    format_local_datetime,
+    format_local_range,
+    parse_datetime_expression,
+)
 
 
 class NaturalDateTests(unittest.TestCase):
@@ -13,6 +17,10 @@ class NaturalDateTests(unittest.TestCase):
     def test_tomorrow_at_6_pm(self):
         result = parse_datetime_expression("tomorrow at 6 PM", now=self.now)
         self.assertEqual(result, datetime(2026, 8, 25, 18, 0, tzinfo=self.zone))
+
+    def test_tomorrow_at_6_without_period_is_six_local(self):
+        result = parse_datetime_expression("tomorrow at 6", now=self.now)
+        self.assertEqual(result, datetime(2026, 8, 25, 6, 0, tzinfo=self.zone))
 
     def test_next_monday_is_not_today(self):
         result = parse_datetime_expression("next Monday at 9 AM", now=self.now)
@@ -43,6 +51,18 @@ class NaturalDateTests(unittest.TestCase):
     def test_naive_iso_is_localised(self):
         result = parse_datetime_expression("2026-08-25T18:00:00", now=self.now)
         self.assertEqual(result.isoformat(), "2026-08-25T18:00:00+05:30")
+
+    def test_friendly_output_converts_utc_and_labels_ist(self):
+        self.assertEqual(
+            format_local_datetime("2026-09-11T01:30:00Z"),
+            "Friday, 11 September 2026 at 7:00 AM IST",
+        )
+        self.assertEqual(
+            format_local_range(
+                "2026-09-11T01:30:00Z", "2026-09-11T02:30:00Z"
+            ),
+            "Friday, 11 September 2026, 7:00 AM–8:00 AM IST",
+        )
 
     def test_unsupported_text_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported date expression"):

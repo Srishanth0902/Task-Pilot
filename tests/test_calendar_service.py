@@ -48,24 +48,38 @@ class FakeRequest:
 class FakeEvents:
     """Records the calls made to it so tests can assert on request bodies."""
 
-    def __init__(self, list_result=None, delete_error=None):
+    def __init__(
+        self,
+        list_result=None,
+        list_error=None,
+        insert_error=None,
+        patch_error=None,
+        delete_error=None,
+    ):
         self.calls = []
         self._list_result = list_result if list_result is not None else {"items": []}
+        self._list_error = list_error
+        self._insert_error = insert_error
+        self._patch_error = patch_error
         self._delete_error = delete_error
 
     def list(self, **kwargs):
         self.calls.append(("list", kwargs))
-        return FakeRequest(self._list_result)
+        return FakeRequest(self._list_result, error=self._list_error)
 
     def insert(self, **kwargs):
         self.calls.append(("insert", kwargs))
         return FakeRequest(
-            {"id": "new-id", "htmlLink": "http://example/new", **kwargs["body"]}
+            {"id": "new-id", "htmlLink": "http://example/new", **kwargs["body"]},
+            error=self._insert_error,
         )
 
     def patch(self, **kwargs):
         self.calls.append(("patch", kwargs))
-        return FakeRequest({"id": kwargs["eventId"], **kwargs["body"]})
+        return FakeRequest(
+            {"id": kwargs["eventId"], **kwargs["body"]},
+            error=self._patch_error,
+        )
 
     def delete(self, **kwargs):
         self.calls.append(("delete", kwargs))
@@ -120,6 +134,13 @@ class GetEventsTests(unittest.TestCase):
 
         self.assertEqual(event["start"], "2026-09-11T18:00:00+05:30")
         self.assertEqual(event["end"], "2026-09-11T19:00:00+05:30")
+
+    def test_google_list_failure_is_structured(self):
+        denied = HttpError(FakeResponse(403), b"forbidden")
+        result = get_events(FakeService(list_error=denied))
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["status_code"], 403)
 
 
 class SearchEventsTests(unittest.TestCase):
@@ -193,6 +214,19 @@ class CreateEventTests(unittest.TestCase):
                 datetime(2026, 8, 24, 2),
             )
 
+    def test_google_create_failure_is_structured(self):
+        denied = HttpError(FakeResponse(403), b"forbidden")
+        zone = ZoneInfo("Asia/Kolkata")
+        result = create_event(
+            FakeService(insert_error=denied),
+            "DSA",
+            datetime(2026, 9, 11, 18, tzinfo=zone),
+            datetime(2026, 9, 11, 19, tzinfo=zone),
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["status_code"], 403)
+
 
 class UpdateEventTests(unittest.TestCase):
     def test_patches_only_the_fields_supplied(self):
@@ -230,6 +264,15 @@ class UpdateEventTests(unittest.TestCase):
             update_event(service, "evt-1")
 
         self.assertEqual(service.events().calls, [])
+
+    def test_google_update_failure_is_structured(self):
+        denied = HttpError(FakeResponse(403), b"forbidden")
+        result = update_event(
+            FakeService(patch_error=denied), "evt-1", summary="New title"
+        )
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["status_code"], 403)
 
 
 class DeleteEventTests(unittest.TestCase):

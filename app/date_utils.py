@@ -59,6 +59,44 @@ def local_now(timezone_name: str = TIMEZONE) -> datetime:
     return datetime.now(get_timezone(timezone_name))
 
 
+def format_local_datetime(value: datetime | str | None) -> str:
+    """Render an API datetime as a friendly, explicitly labelled IST value."""
+    if value is None:
+        return "Time not available"
+    if isinstance(value, str) and "T" not in value:
+        try:
+            return datetime.fromisoformat(value).strftime("%A, %d %B %Y (all day)")
+        except ValueError:
+            return value
+
+    parsed = datetime.fromisoformat(value) if isinstance(value, str) else value
+    local = ensure_aware(parsed)
+    hour = local.strftime("%I").lstrip("0") or "0"
+    return f"{local.strftime('%A, %d %B %Y')} at {hour}:{local:%M %p} IST"
+
+
+def format_local_range(start: datetime | str | None, end: datetime | str | None) -> str:
+    """Render a start/end pair without exposing ISO-8601 implementation details."""
+    if start is None:
+        return "Time not available"
+    if isinstance(start, str) and "T" not in start:
+        return format_local_datetime(start)
+
+    parsed_start = datetime.fromisoformat(start) if isinstance(start, str) else start
+    local_start = ensure_aware(parsed_start)
+    if end is None:
+        return format_local_datetime(local_start)
+    parsed_end = datetime.fromisoformat(end) if isinstance(end, str) else end
+    local_end = ensure_aware(parsed_end)
+    start_hour = local_start.strftime("%I").lstrip("0") or "0"
+    end_hour = local_end.strftime("%I").lstrip("0") or "0"
+    start_clock = f"{start_hour}:{local_start:%M %p}"
+    end_clock = f"{end_hour}:{local_end:%M %p}"
+    if local_start.date() == local_end.date():
+        return f"{local_start.strftime('%A, %d %B %Y')}, {start_clock}–{end_clock} IST"
+    return f"{format_local_datetime(local_start)} to {format_local_datetime(local_end)}"
+
+
 def _parse_clock(expression: str, default: time) -> time:
     match = TIME_PATTERN.search(expression)
     if not match:

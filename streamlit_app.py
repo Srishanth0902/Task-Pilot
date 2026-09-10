@@ -8,6 +8,7 @@ import streamlit as st
 
 from app.api_client import TaskPilotAPI, TaskPilotAPIError
 from app.config import TASK_PILOT_API_URL
+from app.date_utils import format_local_range
 
 
 def _initialize_state():
@@ -31,26 +32,41 @@ def _render_payload(payload: dict):
     if result.get("event_id") and not events:
         st.markdown(f"**{result.get('title', 'Calendar event')}**")
         if result.get("start"):
-            st.caption(f"{result.get('start')} → {result.get('end')}")
+            st.caption(format_local_range(result.get("start"), result.get("end")))
         if result.get("html_link"):
             st.link_button("Open in Google Calendar", result["html_link"])
     if events:
         with st.expander(f"Events ({len(events)})"):
             for event in events:
                 st.markdown(f"**{event.get('title', '(no title)')}**")
-                st.caption(f"{event.get('start')} → {event.get('end')}")
+                st.caption(format_local_range(event.get("start"), event.get("end")))
     if changes:
         with st.expander(f"Proposed changes ({len(changes)})", expanded=True):
             for change in changes:
-                st.json(change)
+                title = change.get("title", "Calendar event")
+                if change.get("action") == "delete":
+                    st.markdown(f"**Delete {title}**")
+                    st.caption(format_local_range(change.get("old_start"), change.get("old_end")))
+                elif change.get("action") == "update":
+                    st.markdown(f"**Move {title}**")
+                    st.caption(
+                        f"From {format_local_range(change.get('old_start'), change.get('old_end'))}  \n"
+                        f"To {format_local_range(change.get('new_start'), change.get('new_end'))}"
+                    )
+                else:
+                    st.markdown(f"**Create {title}**")
+                    st.caption(format_local_range(change.get("new_start"), change.get("new_end")))
     if conflicts:
         with st.expander(f"Conflicts ({len(conflicts)})", expanded=True):
             for event in conflicts:
-                st.markdown(f"- **{event.get('title')}** — {event.get('start')}")
+                st.markdown(
+                    f"- **{event.get('title')}** — "
+                    f"{format_local_range(event.get('start'), event.get('end'))}"
+                )
     if alternatives:
         with st.expander("Available alternatives", expanded=True):
             for slot in alternatives:
-                st.markdown(f"- {slot.get('start')} → {slot.get('end')}")
+                st.markdown(f"- {format_local_range(slot.get('start'), slot.get('end'))}")
 
 
 def _send_message(client: TaskPilotAPI, message: str):
@@ -92,7 +108,7 @@ def _render_sidebar(client: TaskPilotAPI):
                 st.error(str(error))
         for event in st.session_state.upcoming_events:
             st.markdown(f"**{event.get('title', '(no title)')}**")
-            st.caption(str(event.get("start", "")))
+            st.caption(format_local_range(event.get("start"), event.get("end")))
         if st.button("New conversation", use_container_width=True):
             st.session_state.thread_id = str(uuid.uuid4())
             st.session_state.messages = []
@@ -111,7 +127,7 @@ def main():
     _render_sidebar(client)
 
     st.title("📅 Agentic Calendar Assistant")
-    st.caption("Plan, search, reschedule, and safely manage your Google Calendar.")
+    st.caption("Plan, search, reschedule, and safely manage your Google Calendar · All times are IST")
 
     if not st.session_state.messages:
         st.info(

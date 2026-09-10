@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from app.calendar_tools import build_calendar_tools
 from app.config import TIMEZONE, WORKDAY_END_HOUR, WORKDAY_START_HOUR
-from app.date_utils import ensure_aware, local_now
+from app.date_utils import ensure_aware, format_local_datetime, format_local_range, local_now
 from app.scheduling import (
     build_bulk_changes,
     day_window,
@@ -110,7 +110,9 @@ Rules:
   Moving today to tomorrow means shift_minutes=1440. Moving events "by 30
   minutes" means shift_minutes=30.
 - Use bulk_delete for deleting every matching event and provide the same search
-  and date bounds. Bulk actions are only plans until the graph gets confirmation.
+  and date bounds. For "all tasks", "all events", or "everything", omit
+  search_query so every event in the requested range is listed. Bulk actions
+  are only plans until the graph gets confirmation.
 - Use free_slot when asked to find availability and schedule something. Supply
   title, duration_minutes, and the requested day's time_min/time_max. The graph
   uses the configured {WORKDAY_START_HOUR:02d}:00-{WORKDAY_END_HOUR:02d}:00
@@ -147,7 +149,8 @@ def _coerce_query_plan(raw) -> QueryPlan:
 
 def _clock_from_text(text: str) -> tuple[int, int] | None:
     match = re.search(
-        r"\b(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*(?P<period>am|pm)\b",
+        r"(?:\bat\s+|^)(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*"
+        r"(?P<period>am|pm)?\b",
         text,
         re.IGNORECASE,
     )
@@ -155,15 +158,49 @@ def _clock_from_text(text: str) -> tuple[int, int] | None:
         return None
     hour = int(match.group("hour"))
     minute = int(match.group("minute") or 0)
-    if not 1 <= hour <= 12 or minute > 59:
+    period = (match.group("period") or "").lower()
+    if minute > 59 or (period and not 1 <= hour <= 12) or (not period and hour > 23):
         return None
-    hour = hour % 12 + (12 if match.group("period").lower() == "pm" else 0)
+    if period:
+        hour = hour % 12 + (12 if period == "pm" else 0)
     return hour, minute
 
 
 def _plan_datetime(value: str) -> datetime:
     """Parse and localize a planner-produced ISO datetime."""
     return ensure_aware(datetime.fromisoformat(value))
+
+
+def _normalise_action_times(action: dict, query: str) -> None:
+    """Force planner timestamps and explicit user clock times into IST."""
+    for field in ("start_time", "end_time", "time_min", "time_max"):
+        value = action.get(field)
+        if value:
+            action[field] = _plan_datetime(value).isoformat()
+
+    if action.get("intent") not in {"create", "update"} or not action.get("start_time"):
+        return
+    clock = _clock_from_text(query)
+    if not clock:
+        return
+    start = _plan_datetime(action["start_time"])
+    end = _plan_datetime(action["end_time"]) if action.get("end_time") else None
+    duration = end - start if end else timedelta(hours=1)
+    corrected_start = start.replace(
+        hour=clock[0], minute=clock[1], second=0, microsecond=0
+    )
+    action["start_time"] = corrected_start.isoformat()
+    action["end_time"] = (corrected_start + duration).isoformat()
+
+
+def _generic_bulk_query(value: str | None) -> bool:
+    """Return true when a bulk request means every event, not a title search."""
+    if not value:
+        return True
+    words = set(re.findall(r"[a-z]+", value.casefold()))
+    return bool(words) and words <= {
+        "all", "calendar", "everything", "event", "events", "my", "task", "tasks"
+    }
 
 
 def _select_candidate(query: str, candidates: list[dict], event_id: str | None):
@@ -295,7 +332,10 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             )
             plan = _coerce_query_plan(raw)
         except Exception as error:
-            return {"error": f"Could not understand the request: {error}"}
+            return {
+                "error": f"Could not understand the request: {error}",
+                "verified": False,
+            }
 
         previous = state.get("pending_action")
         continuing = bool(previous and plan.continue_previous)
@@ -315,6 +355,10 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             if selected:
                 action["event_id"] = selected["event_id"]
         _apply_followup_time(action, selected, query)
+        try:
+            _normalise_action_times(action, query)
+        except ValueError as error:
+            return {"error": f"Invalid event time: {error}"}
 
         return {
             "intent": action.get("intent", "unknown"),
@@ -367,7 +411,9 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
     def search_calendar(state: CalendarAgentState):
         action = dict(state.get("pending_action") or {})
         query = action.get("search_query") or action.get("title")
-        if not query:
+        is_bulk = action.get("intent") in {"bulk_update", "bulk_delete"}
+        list_everything = is_bulk and _generic_bulk_query(query)
+        if not query and not list_everything:
             return {"clarification": "Which event should I find?"}
         args = {
             "query": query,
@@ -380,13 +426,24 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             "time_max": action.get("time_max"),
         }
         try:
-            result = tools["search_calendar_events"].invoke(
-                {key: value for key, value in args.items() if value is not None}
-            )
+            if list_everything:
+                list_args = {
+                    "max_results": args["max_results"],
+                    "time_min": args["time_min"],
+                    "time_max": args["time_max"],
+                }
+                result = tools["list_calendar_events"].invoke(
+                    {key: value for key, value in list_args.items() if value is not None}
+                )
+            else:
+                result = tools["search_calendar_events"].invoke(
+                    {key: value for key, value in args.items() if value is not None}
+                )
         except Exception as error:
             return {"error": f"Calendar search failed: {error}"}
         if not result.get("success"):
-            return {"error": result.get("error", "Calendar search failed.")}
+            detail = result.get("error", "Unknown calendar error")
+            return {"error": f"Calendar search failed: {detail}"}
         return {"tool_result": result, "candidate_events": result.get("events", [])}
 
     def route_after_search(state: CalendarAgentState) -> str:
@@ -412,7 +469,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return {"clarification": "I could not find a matching calendar event."}
         if not selected:
             choices = "; ".join(
-                f"{index}. {event.get('title')} at {event.get('start')}"
+                f"{index}. {event.get('title')} at {format_local_datetime(event.get('start'))}"
                 for index, event in enumerate(candidates, start=1)
             )
             return {
@@ -426,7 +483,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 "selected_event": selected,
                 "pending_action": action,
                 "clarification": f"I found {selected.get('title')} at "
-                f"{selected.get('start')}. What time should I move it to?",
+                f"{format_local_datetime(selected.get('start'))}. What time should I move it to?",
             }
         return {"selected_event": selected, "pending_action": action}
 
@@ -616,7 +673,9 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             else []
         )
         conflict_names = ", ".join(event.get("title") for event in conflicts)
-        options = ", ".join(slot["start"] for slot in alternatives) or "none that day"
+        options = ", ".join(
+            format_local_range(slot["start"], slot["end"]) for slot in alternatives
+        ) or "none that day"
         action["previous_start"] = start.isoformat()
         action["previous_end"] = end.isoformat()
         action.pop("start_time", None)
@@ -641,16 +700,20 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         rows = []
         for index, change in enumerate(changes, start=1):
             if change["action"] == "delete":
-                rows.append(f"{index}. Delete {change.get('title')} at {change.get('old_start')}")
+                rows.append(
+                    f"{index}. Delete {change.get('title')} — "
+                    f"{format_local_range(change.get('old_start'), change.get('old_end'))}"
+                )
             elif change["action"] == "update":
                 rows.append(
-                    f"{index}. Move {change.get('title')} from {change.get('old_start')} "
-                    f"to {change.get('new_start')}"
+                    f"{index}. Move {change.get('title')} from "
+                    f"{format_local_range(change.get('old_start'), change.get('old_end'))} "
+                    f"to {format_local_range(change.get('new_start'), change.get('new_end'))}"
                 )
             else:
                 rows.append(
-                    f"{index}. Create {change.get('title')} from {change.get('new_start')} "
-                    f"to {change.get('new_end')}"
+                    f"{index}. Create {change.get('title')} — "
+                    f"{format_local_range(change.get('new_start'), change.get('new_end'))}"
                 )
         text = "Proposed changes:\n" + "\n".join(rows) + "\nProceed? (yes/no)"
         return {
@@ -780,7 +843,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 text = "I found no matching calendar events."
             else:
                 rows = [
-                    f"{index}. {event.get('title')} - {event.get('start')}"
+                    f"{index}. {event.get('title')} — "
+                    f"{format_local_range(event.get('start'), event.get('end'))}"
                     for index, event in enumerate(events, start=1)
                 ]
                 text = "I found:\n" + "\n".join(rows)
@@ -797,8 +861,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         else:
             verb = "Created" if intent == "create" else "Updated"
             text = (
-                f"{verb} {result.get('title')} from {result.get('start')} "
-                f"to {result.get('end')}."
+                f"{verb} {result.get('title')} — "
+                f"{format_local_range(result.get('start'), result.get('end'))}."
             )
             clear = True
         return {
@@ -815,7 +879,12 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
 
     def handle_error(state: CalendarAgentState):
         text = f"I could not complete that request: {state.get('error', 'unknown error')}"
-        return {"messages": [AIMessage(content=text)], "response": text}
+        return {
+            "messages": [AIMessage(content=text)],
+            "response": text,
+            "verified": False,
+            "awaiting_confirmation": False,
+        }
 
     workflow = StateGraph(CalendarAgentState)
     workflow.add_node("understand_query", understand_query)
