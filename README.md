@@ -4,14 +4,14 @@ An agentic calendar assistant that turns natural-language requests into safe,
 structured Google Calendar operations.
 
 **Status:** Week 2 implementation is complete and tested offline. Google OAuth
-and a live LLM provider are deliberately deferred, so no real calendar was
-changed during development.
+and live Calendar read, search, create, update and delete were verified on
+September 10, 2026. Live LLM provider setup and end-to-end language testing remain pending.
 
 ## Roadmap
 
 | Week | Goal | Status |
 |---|---|---|
-| 1 | Project scaffold and Google Calendar CRUD | Code complete; live OAuth pending |
+| 1 | Project scaffold and Google Calendar CRUD | Live OAuth and CRUD verified |
 | 2 | Structured CRUD, Pydantic schemas, LangChain tools, relative dates | Implemented and offline-tested |
 | 3 | Advanced agent workflows | Planned |
 | 4 | Multi-step reasoning | Planned |
@@ -204,11 +204,18 @@ Copy `.env.example` to `.env` if you want to override defaults.
 | `GOOGLE_CALENDAR_ID` | `primary` | Calendar to operate on |
 | `TIMEZONE` | `Asia/Kolkata` | IANA timezone for event operations |
 
-## Deferred acceptance checks
+## Live verification and remaining acceptance checks
 
-These require credentials and have not been claimed as complete:
+Verified on September 10, 2026:
 
-- OAuth sign-in against a real Google account
-- Reading a real calendar
-- Creating and visually confirming a real event
-- Natural-language tool selection by a live LLM provider
+- OAuth sign-in and local token creation; credentials and token remain Git-ignored.
+- Reading the real calendar and searching for the created event.
+- Creating `Agentic AI Project Work` for September 11, 2026, 18:00-19:00 Asia/Kolkata,
+  reading it back, and confirming it in the Google Calendar browser interface.
+- Renaming and moving a temporary event, deleting it, and checking repeated deletion.
+
+The calendar's display timezone is UTC, so the retained event appears as
+12:30-13:30 there: the same instant as 18:00-19:00 Asia/Kolkata.
+
+Still pending: selecting/configuring a live model provider and verifying
+`Add ML study tomorrow at 6 PM` through a real LLM and Calendar tool call.
