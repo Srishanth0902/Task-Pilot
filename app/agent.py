@@ -22,6 +22,9 @@ timezone-aware ISO-8601 or these phrases: tomorrow, next Monday, Friday at
 event, omit end_time so the tool uses the one-hour default. Never invent an
 event_id: search for the event first when an update or deletion lacks one.
 Report the structured tool result accurately, including any error.
+Never calculate or display a second timezone conversion. The tool already
+returns start and end in {TIMEZONE}; quote those values exactly when reporting
+event times.
 """
 
 

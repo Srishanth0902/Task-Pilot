@@ -34,6 +34,14 @@ CALENDAR_ID = os.getenv("GOOGLE_CALENDAR_ID", "primary")
 # IANA timezone used when creating events.
 TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 
+# Live LLM provider. Keeping the model slug in configuration makes switching
+# among OpenRouter models a one-line .env change.
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "qwen/qwen3-30b-a3b").strip()
+OPENROUTER_BASE_URL = os.getenv(
+    "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
+).strip()
+
 # Full calendar access: later weeks need to update and delete events, and
 # widening the scope after the fact would force every user to consent again.
 SCOPES = ["https://www.googleapis.com/auth/calendar"]

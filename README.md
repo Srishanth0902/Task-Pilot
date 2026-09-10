@@ -3,9 +3,9 @@
 An agentic calendar assistant that turns natural-language requests into safe,
 structured Google Calendar operations.
 
-**Status:** Week 2 implementation is complete and tested offline. Google OAuth
-and live Calendar read, search, create, update and delete were verified on
-September 10, 2026. Live LLM provider setup and end-to-end language testing remain pending.
+**Status:** Week 2 is complete. Google OAuth and live Calendar CRUD were
+verified on September 10, 2026. Qwen3-30B-A3B was then connected through
+OpenRouter and used to create a real event from a natural-language request.
 
 ## Roadmap
 
@@ -23,7 +23,7 @@ September 10, 2026. Live LLM provider setup and end-to-end language testing rema
 User request
     |
     v
-Injected LangChain-compatible LLM
+OpenRouter / Qwen3-30B-A3B (switchable)
     |
     v
 Tool selection + Pydantic validation
@@ -154,27 +154,18 @@ network access. They cover the Google request payloads, structured responses,
 schemas, all required date phrases, LangChain tool schemas, and a fake-model
 tool-selection loop.
 
-## Connecting a model later
+## OpenRouter model configuration
 
-The project intentionally does not install a model-provider package. When a
-provider is selected, create its LangChain chat model and inject it:
+The live model is constructed in `app/llm.py`. OpenRouter's OpenAI-compatible
+endpoint is accessed through `langchain-openai`, while the calendar agent stays
+provider-independent:
 
 ```python
-from app.agent import run_calendar_request
-from app.calendar_service import get_calendar_service
-
-service = get_calendar_service()
-model = your_langchain_compatible_chat_model
-
-result = run_calendar_request(
-    "Add ML study tomorrow at 6 PM",
-    model=model,
-    service=service,
-)
+python -m app.chat "Add ML study tomorrow at 6 PM"
 ```
 
-The application code does not need to change when switching between OpenAI,
-Anthropic, Google, or a compatible local model; only model construction changes.
+Set `OPENROUTER_MODEL` to another tool-capable OpenRouter model to switch it
+without changing agent or calendar code.
 
 ## Google Cloud setup (deferred live test)
 
@@ -203,6 +194,9 @@ Copy `.env.example` to `.env` if you want to override defaults.
 | `GOOGLE_TOKEN_FILE` | `token.json` | Cached user authorization |
 | `GOOGLE_CALENDAR_ID` | `primary` | Calendar to operate on |
 | `TIMEZONE` | `Asia/Kolkata` | IANA timezone for event operations |
+| `OPENROUTER_API_KEY` | none | Secret API key; required for live LLM calls |
+| `OPENROUTER_MODEL` | `qwen/qwen3-30b-a3b` | Switchable OpenRouter model slug |
+| `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API endpoint |
 
 ## Live verification and remaining acceptance checks
 
@@ -217,5 +211,15 @@ Verified on September 10, 2026:
 The calendar's display timezone is UTC, so the retained event appears as
 12:30-13:30 there: the same instant as 18:00-19:00 Asia/Kolkata.
 
-Still pending: selecting/configuring a live model provider and verifying
-`Add ML study tomorrow at 6 PM` through a real LLM and Calendar tool call.
+Also verified on September 10, 2026:
+
+- OpenRouter connectivity with `qwen/qwen3-30b-a3b`.
+- Live Qwen tool selection against a fake calendar before allowing a mutation.
+- `Add ML study tomorrow at 6 PM for one hour` through the real LLM, LangChain
+  agent, calendar tool, and Google Calendar API.
+- Live LLM selection and execution of all five tools: create, list, search,
+  update, and delete. The CRUD test used a disposable event and verified that
+  it was absent after deletion.
+- The resulting event was read back as September 11, 2026, 18:00-19:00
+  Asia/Kolkata. Google may return UTC timestamps; service responses normalize
+  them back to the configured timezone before the LLM sees them.

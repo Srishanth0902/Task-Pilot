@@ -12,10 +12,10 @@ google-auth-oauthlib==1.4.0
 # Loads settings from a .env file
 python-dotenv==1.2.3
 
-# Week 2: validated schemas and provider-independent LangChain tools.
-# No model provider package is required until live LLM testing.
+# Week 2: validated schemas, LangChain tools, and OpenRouter-compatible chat models.
 pydantic==2.13.5
 langchain==1.4.0
+langchain-openai==1.6.2
 
 # IANA timezone database for Windows and other systems without OS tzdata.
 tzdata==2026.2

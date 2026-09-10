@@ -103,6 +103,24 @@ class GetEventsTests(unittest.TestCase):
         self.assertEqual(result["events"], [])
         self.assertEqual(result["count"], 0)
 
+    def test_normalises_google_utc_times_to_the_configured_timezone(self):
+        service = FakeService(
+            list_result={
+                "items": [
+                    {
+                        "summary": "ML study",
+                        "start": {"dateTime": "2026-09-11T12:30:00Z"},
+                        "end": {"dateTime": "2026-09-11T13:30:00Z"},
+                    }
+                ]
+            }
+        )
+
+        event = get_events(service)["events"][0]
+
+        self.assertEqual(event["start"], "2026-09-11T18:00:00+05:30")
+        self.assertEqual(event["end"], "2026-09-11T19:00:00+05:30")
+
 
 class SearchEventsTests(unittest.TestCase):
     def test_searches_with_text_and_structured_results(self):
