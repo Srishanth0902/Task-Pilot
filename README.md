@@ -3,9 +3,8 @@
 An agentic calendar assistant that turns natural-language requests into safe,
 structured Google Calendar operations.
 
-**Status:** Week 2 is complete. Google OAuth and live Calendar CRUD were
-verified on September 10, 2026. Qwen3-30B-A3B was then connected through
-OpenRouter and used to create a real event from a natural-language request.
+**Status:** Weeks 1-3 are complete. The live Google Calendar integration and
+OpenRouter/Qwen model now run through a stateful, conditional LangGraph agent.
 
 ## Roadmap
 
@@ -13,43 +12,42 @@ OpenRouter and used to create a real event from a natural-language request.
 |---|---|---|
 | 1 | Project scaffold and Google Calendar CRUD | Live OAuth and CRUD verified |
 | 2 | Structured CRUD, Pydantic schemas, LangChain tools, relative dates | Implemented and offline-tested |
-| 3 | Advanced agent workflows | Planned |
+| 3 | Stateful LangGraph workflow and follow-up context | Implemented and tested |
 | 4 | Multi-step reasoning | Planned |
 | 5 | Interface and polish | Planned |
 
 ## Architecture
 
 ```text
-User request
-    |
-    v
-OpenRouter / Qwen3-30B-A3B (switchable)
-    |
-    v
-Tool selection + Pydantic validation
-    |
-    v
-Structured Calendar tool
-    |
-    v
-Google Calendar API
+START -> Understand query -> Search needed?
+                              | yes            | no
+                              v                v
+                         Search event      Execute action
+                              |
+                              v
+                         Resolve event ----+
+                              |
+                              v
+                         Execute -> Verify -> Respond -> END
 ```
 
 Neither the model nor the Google service is created at import time. Both are
-injected, which keeps the code provider-independent and makes the whole Week 2
-path testable using scripted fakes.
+injected, which keeps the code provider-independent and makes the complete
+workflow testable using scripted fakes.
 
 ## Project structure
 
 ```text
 Task-Pilot/
 |-- app/
-|   |-- agent.py              # provider-independent LangChain agent factory
+|   |-- agent.py              # compatibility entry points for the graph
+|   |-- graph_agent.py        # state, nodes, routing, memory, and conversation API
 |   |-- calendar_service.py   # Google OAuth and structured Calendar CRUD
 |   |-- calendar_tools.py     # five LangChain StructuredTool definitions
 |   |-- config.py             # environment-backed configuration
 |   |-- date_utils.py         # timezone-aware relative-date parsing
 |   |-- main.py               # live Google Calendar CRUD demonstration
+|   |-- chat.py               # one-shot or interactive stateful CLI
 |   `-- schemas.py            # Pydantic input contracts
 |-- tests/                    # offline service, schema, tool, date, and agent tests
 |-- requirements.txt
@@ -154,13 +152,51 @@ network access. They cover the Google request payloads, structured responses,
 schemas, all required date phrases, LangChain tool schemas, and a fake-model
 tool-selection loop.
 
+## Week 3 LangGraph workflow
+
+`app/graph_agent.py` defines `CalendarAgentState` with the requested fields:
+`messages`, `user_query`, `intent`, `selected_event`, `tool_result`, and
+`pending_action`. It also retains candidate events, clarification/error state,
+verification status, and the final response.
+
+The compiled `StateGraph` contains these nodes:
+
+- `understand_query`
+- `search_calendar`
+- `resolve_event`
+- `execute_action`
+- `verify_result`
+- `generate_response`
+- `handle_error`
+
+Update and delete requests without an event ID search first. One match proceeds;
+zero matches return safely; multiple matches preserve the candidates and ask the
+user to choose without changing the calendar. `InMemorySaver` checkpoints state
+under a conversation `thread_id`, so follow-up answers complete the pending
+action while retaining the selected event.
+
+Start an interactive session to exercise follow-up context:
+
+```powershell
+python -m app.chat
+```
+
+Example:
+
+```text
+You: Move my DSA session tomorrow
+Task Pilot: I found DSA session at 2026-09-11T18:00:00+05:30. What time should I move it to?
+You: 8 PM
+Task Pilot: Updated DSA session from 2026-09-11T20:00:00+05:30 to 2026-09-11T21:00:00+05:30.
+```
+
 ## OpenRouter model configuration
 
 The live model is constructed in `app/llm.py`. OpenRouter's OpenAI-compatible
 endpoint is accessed through `langchain-openai`, while the calendar agent stays
 provider-independent:
 
-```python
+```powershell
 python -m app.chat "Add ML study tomorrow at 6 PM"
 ```
 
@@ -223,3 +259,7 @@ Also verified on September 10, 2026:
 - The resulting event was read back as September 11, 2026, 18:00-19:00
   Asia/Kolkata. Google may return UTC timestamps; service responses normalize
   them back to the configured timezone before the LLM sees them.
+- The Week 3 graph was exercised end to end with Qwen and the real calendar:
+  it created a disposable event, searched and selected it, paused an incomplete
+  move for a follow-up time, moved it while preserving its duration, deleted
+  it, and confirmed cleanup.

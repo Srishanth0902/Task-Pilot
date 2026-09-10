@@ -15,6 +15,7 @@ python-dotenv==1.2.3
 # Week 2: validated schemas, LangChain tools, and OpenRouter-compatible chat models.
 pydantic==2.13.5
 langchain==1.4.0
+langgraph==1.2.11
 langchain-openai==1.6.2
 
 # IANA timezone database for Windows and other systems without OS tzdata.
