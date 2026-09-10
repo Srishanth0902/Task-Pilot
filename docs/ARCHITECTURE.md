@@ -1,8 +1,8 @@
 # Task-Pilot — Architecture
 
-Target architecture for the 6-week agentic calendar assistant. It describes the
-end state, the layer boundaries that get us there, and the week-by-week path
-from the Week 1 code that exists today.
+Target architecture for the agentic calendar assistant. It describes the end
+state and the layer boundaries that get there. The six-week build has now
+shipped in a flat `app/` package; §19 maps those modules onto the layers below.
 
 ![Task-Pilot architecture: five layers from interface down to domain. Requests enter through Streamlit and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.](architecture-diagram.svg)
 
@@ -390,8 +390,9 @@ and deployment need genuinely different ones:
 This matters more than it looks. The current README's troubleshooting section
 already notes that `run_local_server()` cannot work on a headless machine — so
 the moment the app is deployed, a desktop OAuth client stops being viable.
-Putting a seam here in Week 3 costs nothing; discovering it in Week 6 costs a
-rewrite of the auth path during deployment week.
+The seam costs nothing to put in early; discovered at deployment it costs a
+rewrite of the auth path. The shipped code still uses `InstalledAppFlow`, so
+this one is outstanding rather than settled.
 
 `TokenStore` is likewise a small port: `FileTokenStore` today, an encrypted
 per-user row later, without touching any calling code.
@@ -956,40 +957,54 @@ why the seam is created in Week 3 rather than discovered in Week 6.
 
 ## 19. Migration path from today's code
 
-Nothing here throws away Week 1. The existing code is well-factored — the
-service module already isolates Google, and the functions already take an
-injected client — which is precisely what makes the port extraction mechanical.
+All six weeks have now shipped on `main`, in a flat `app/` package rather
+than the layered tree above. Nothing here throws that away: the sections above
+describe the same system, drawn with its seams made explicit. This section maps
+the shipped modules onto those seams.
 
-| Today | Becomes | When |
-|-------|---------|------|
-| `app/calendar_service.py` → `get_calendar_service()` | `providers/google_auth.py` | Week 3 |
-| `app/calendar_service.py` → CRUD functions | `providers/google_client.py` implementing `CalendarPort` | Week 3 |
-| `app/calendar_service.py` → structured result dicts | `providers/mapper.py` → `CalendarEvent` | Week 3 |
-| `app/schemas.py` Pydantic inputs | `agent/tools/schemas.py` (unchanged in substance) | Week 3 |
-| `app/calendar_tools.py` → five `StructuredTool`s | `agent/tools/` split read / plan / apply | Week 3 |
-| `app/date_utils.py` | `domain/timex.py`, resolving against an injected `Clock` | Week 3 |
-| `app/agent.py` → `run_calendar_request()` | `agent/graph.py` — LangGraph node chain | Week 3 |
-| `app/config.py` module globals | `Settings` object injected via `deps.py` | Week 3 |
-| `app/main.py` demo script | `app/cli.py` | Week 3 |
+| Shipped today | Becomes |
+|-------|---------|
+| `app/calendar_service.py` → `get_calendar_service()` | `providers/google_auth.py` |
+| `app/calendar_service.py` → CRUD functions | `providers/google_client.py` implementing `CalendarPort` |
+| `app/calendar_service.py` → structured result dicts | `providers/mapper.py` → `CalendarEvent` |
+| `app/schemas.py` Pydantic inputs | `agent/tools/schemas.py` (unchanged in substance) |
+| `app/calendar_tools.py` → `StructuredTool`s | `agent/tools/` split read / plan / apply |
+| `app/date_utils.py` | `domain/timex.py`, resolving against an injected `Clock` |
+| `app/scheduling.py` | `services/availability.py` + `services/bulk.py` |
+| `app/graph_agent.py` | `agent/` — `state.py`, `nodes.py`, `routing.py`, `graph.py` |
+| `app/api.py` | `api/routes.py` + `api/deps.py` |
+| `app/llm.py`, `app/observability.py` | `agent/llm.py`, `observability/` |
+| `app/evaluation.py`, `evaluation/queries.json` | `evals/` |
+| `app/config.py` module globals | `Settings` object injected via `deps.py` |
 
-Week by week, the layers arrive in dependency order:
+Week by week, what actually landed:
 
-| Week | Adds | Layer |
+| Week | Shipped | Layer |
 |------|------|-------|
 | 1 ✅ | OAuth + full CRUD against Google | provider (informal) |
 | 2 ✅ | Structured CRUD results, Pydantic schemas, `StructuredTool`s, relative-date parsing | tools (informal) |
-| 3 | `domain/`, `providers/` with port + fake, `services/event_service.py`, `timex.py`; then `agent/` — state, nodes, routing, checkpointer | 1–4 |
-| 4 | `availability.py`, `bulk.py`, plan/confirm gate, `journal.py` | 3–4 |
-| 5 | `api/`, `ui/`, `tests/` | 5 |
-| 6 | `evals/`, `observability/`, deployment, docs | cross-cutting |
+| 3 ✅ | `graph_agent.py` — LangGraph state, nodes, conditional routing, `InMemorySaver` checkpointing | agent |
+| 4 ✅ | `scheduling.py` — conflict detection, free-slot search, bulk plans, confirmation gate | services (informal) |
+| 5 ✅ | `api.py` (FastAPI), `streamlit_app.py`, the test suite | interface |
+| 6 ✅ | `evaluation.py` + 45-query dataset, `observability.py`, Docker Compose, CI, docs | cross-cutting |
 
-Week 2 shipped without the port: `calendar_service.py` gained structured
-results and the tools call it directly. That is still the highest-leverage move
-available, and it is now the **first thing Week 3 should do** — extract
-`CalendarPort`, write `FakeCalendarAdapter` alongside it, and inject the
-`Clock`. Three changes, an afternoon at this stage, and they are what make the
-graph and the Week 6 evaluations testable. Deferred to Week 5, the same changes
-require touching every module written in between.
+**The `CalendarPort` was never extracted.** The tools call `calendar_service`
+directly, and offline testing was solved a different way: the tests fake the
+Google client itself — `FakeService.events().list().execute()` — and inject it
+where the real client would go. That works, and it carried the project to a
+graph, an API, a UI, and a 45-query evaluation harness that all run without a
+network. The doc predicted this seam was needed to get there; it wasn't.
+
+What the missing port does cost is narrower than "untestable", and worth
+stating precisely: the fakes mirror Google's wire shape rather than a domain
+interface, so they encode Google's pagination, its `dateTime`/`date` split, and
+its error envelope in test code. A second calendar backend, or a change on
+Google's side, is felt in the tests as well as the adapter. Extracting the port
+now is the same mechanical change §6.1 describes — it is simply a refactor of
+working code rather than a foundation, and should be judged on that basis.
+
+The rest of this document stands as the target: a reference for where the
+seams go if and when this codebase is grown past a six-week build.
 
 ---
 

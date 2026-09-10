@@ -9,6 +9,7 @@ it across many operations.
 """
 
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -64,11 +65,20 @@ def _normalise_event(event):
     """Reduce Google's large event resource to our stable public contract."""
     start = event.get("start", {})
     end = event.get("end", {})
+
+    def local_value(value):
+        # Google may return UTC even when the request used a local offset.
+        # Returning the configured timezone keeps the structured contract easy
+        # for an LLM to report without performing error-prone conversion.
+        if not value or "T" not in value:
+            return value
+        return datetime.fromisoformat(value).astimezone(ZoneInfo(TIMEZONE)).isoformat()
+
     return {
         "event_id": event.get("id"),
         "title": event.get("summary", "(no title)"),
-        "start": start.get("dateTime", start.get("date")),
-        "end": end.get("dateTime", end.get("date")),
+        "start": local_value(start.get("dateTime", start.get("date"))),
+        "end": local_value(end.get("dateTime", end.get("date"))),
         "description": event.get("description"),
         "location": event.get("location"),
         "html_link": event.get("htmlLink"),

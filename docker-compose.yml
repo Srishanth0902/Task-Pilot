@@ -1,0 +1,41 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    env_file:
+      - .env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      GOOGLE_CREDENTIALS_FILE: /run/secrets/google_credentials.json
+      GOOGLE_TOKEN_FILE: /run/secrets/google_token.json
+      LOG_FILE: /app/logs/task_pilot.jsonl
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./credentials.json:/run/secrets/google_credentials.json:ro
+      - ./token.json:/run/secrets/google_token.json
+      - task-pilot-logs:/app/logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    environment:
+      TASK_PILOT_API_URL: http://api:8000
+    ports:
+      - "8501:8501"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  task-pilot-logs:

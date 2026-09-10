@@ -1,0 +1,59 @@
+{
+  "version": "1.0",
+  "timezone": "Asia/Kolkata",
+  "cases": [
+    {"id":"create-01","category":"CREATE","query":"Add DSA tomorrow at 6 PM","expected_intent":"create","expected_tool":"create_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"create-02","category":"CREATE","query":"Schedule yoga Friday at 7 AM for one hour","expected_intent":"create","expected_tool":"create_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"create-03","category":"CREATE","query":"Create a project review next Monday at 10 AM","expected_intent":"create","expected_tool":"create_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"create-04","category":"CREATE","query":"Add dentist appointment tomorrow at 4:30 PM","expected_intent":"create","expected_tool":"create_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"create-05","category":"CREATE","query":"Block two hours for ML revision on Saturday at 2 PM","expected_intent":"create","expected_tool":"create_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"create-06","category":"CREATE","query":"Add lunch with Arun tomorrow","expected_intent":"create","expected_tool":"none","expected_outcome":"clarify","clarification_required":true},
+
+    {"id":"read-01","category":"READ","query":"What is on my calendar tomorrow?","expected_intent":"list","expected_tool":"list_calendar_events","expected_outcome":"list","clarification_required":false},
+    {"id":"read-02","category":"READ","query":"Show my next ten events","expected_intent":"list","expected_tool":"list_calendar_events","expected_outcome":"list","clarification_required":false},
+    {"id":"read-03","category":"READ","query":"Find my DSA sessions this week","expected_intent":"search","expected_tool":"search_calendar_events","expected_outcome":"list","clarification_required":false},
+    {"id":"read-04","category":"READ","query":"Do I have a dentist appointment Friday?","expected_intent":"search","expected_tool":"search_calendar_events","expected_outcome":"list","clarification_required":false},
+    {"id":"read-05","category":"READ","query":"List my meetings next Monday","expected_intent":"search","expected_tool":"search_calendar_events","expected_outcome":"list","clarification_required":false},
+
+    {"id":"update-01","category":"UPDATE","query":"Move my ML class to 8 PM","expected_intent":"update","expected_tool":"update_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"update-02","category":"UPDATE","query":"Rename DSA practice to Algorithms practice","expected_intent":"update","expected_tool":"update_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"update-03","category":"UPDATE","query":"Move tomorrow's gym session to 7 AM","expected_intent":"update","expected_tool":"update_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"update-04","category":"UPDATE","query":"Add Room 204 as the location for project review","expected_intent":"update","expected_tool":"update_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"update-05","category":"UPDATE","query":"Move my study task","expected_intent":"update","expected_tool":"search_calendar_events","expected_outcome":"clarify","clarification_required":true},
+
+    {"id":"delete-01","category":"DELETE","query":"Delete my gym session on Friday","expected_intent":"delete","expected_tool":"delete_calendar_event","expected_outcome":"confirm","clarification_required":true},
+    {"id":"delete-02","category":"DELETE","query":"Remove the dentist appointment tomorrow","expected_intent":"delete","expected_tool":"delete_calendar_event","expected_outcome":"confirm","clarification_required":true},
+    {"id":"delete-03","category":"DELETE","query":"Cancel my DSA practice at 6 PM","expected_intent":"delete","expected_tool":"delete_calendar_event","expected_outcome":"confirm","clarification_required":true},
+    {"id":"delete-04","category":"DELETE","query":"Delete event id abc123","expected_intent":"delete","expected_tool":"delete_calendar_event","expected_outcome":"confirm","clarification_required":true},
+    {"id":"delete-05","category":"DELETE","query":"Remove my project review next Monday","expected_intent":"delete","expected_tool":"delete_calendar_event","expected_outcome":"confirm","clarification_required":true},
+
+    {"id":"bulk-01","category":"BULK_UPDATE","query":"Move all study sessions tomorrow by 1 hour","expected_intent":"bulk_update","expected_tool":"update_calendar_event","expected_outcome":"confirm","clarification_required":true},
+    {"id":"bulk-02","category":"BULK_UPDATE","query":"Move all meetings tomorrow by 30 minutes","expected_intent":"bulk_update","expected_tool":"update_calendar_event","expected_outcome":"confirm","clarification_required":true},
+    {"id":"bulk-03","category":"BULK_UPDATE","query":"Move all my study tasks from today to tomorrow","expected_intent":"bulk_update","expected_tool":"update_calendar_event","expected_outcome":"confirm","clarification_required":true},
+    {"id":"bulk-04","category":"BULK_UPDATE","query":"Shift every class next week two hours later","expected_intent":"bulk_update","expected_tool":"update_calendar_event","expected_outcome":"confirm","clarification_required":true},
+    {"id":"bulk-05","category":"BULK_UPDATE","query":"Move my study sessions to Monday","expected_intent":"bulk_update","expected_tool":"update_calendar_event","expected_outcome":"confirm","clarification_required":true},
+
+    {"id":"free-01","category":"FREE_SLOT_SEARCH","query":"Find two hours free on Monday","expected_intent":"free_slot","expected_tool":"list_calendar_events","expected_outcome":"clarify","clarification_required":true},
+    {"id":"free-02","category":"FREE_SLOT_SEARCH","query":"Find a 2-hour free slot tomorrow and schedule DSA practice","expected_intent":"free_slot","expected_tool":"list_calendar_events","expected_outcome":"confirm","clarification_required":true},
+    {"id":"free-03","category":"FREE_SLOT_SEARCH","query":"When am I free for 30 minutes Friday?","expected_intent":"free_slot","expected_tool":"list_calendar_events","expected_outcome":"list","clarification_required":false},
+    {"id":"free-04","category":"FREE_SLOT_SEARCH","query":"Schedule yoga in my first free one-hour slot tomorrow","expected_intent":"free_slot","expected_tool":"list_calendar_events","expected_outcome":"confirm","clarification_required":true},
+    {"id":"free-05","category":"FREE_SLOT_SEARCH","query":"Find time for project work next week","expected_intent":"free_slot","expected_tool":"none","expected_outcome":"clarify","clarification_required":true},
+
+    {"id":"ambiguous-01","category":"AMBIGUOUS_REQUEST","query":"Delete my meeting","expected_intent":"delete","expected_tool":"search_calendar_events","expected_outcome":"clarify","clarification_required":true},
+    {"id":"ambiguous-02","category":"AMBIGUOUS_REQUEST","query":"Move it to later","expected_intent":"unknown","expected_tool":"none","expected_outcome":"clarify","clarification_required":true},
+    {"id":"ambiguous-03","category":"AMBIGUOUS_REQUEST","query":"Add a calendar event","expected_intent":"create","expected_tool":"none","expected_outcome":"clarify","clarification_required":true},
+    {"id":"ambiguous-04","category":"AMBIGUOUS_REQUEST","query":"Reschedule my class","expected_intent":"update","expected_tool":"search_calendar_events","expected_outcome":"clarify","clarification_required":true},
+    {"id":"ambiguous-05","category":"AMBIGUOUS_REQUEST","query":"Clear my calendar","expected_intent":"bulk_delete","expected_tool":"none","expected_outcome":"clarify","clarification_required":true},
+
+    {"id":"conflict-01","category":"CONFLICT","query":"Schedule ML revision tomorrow at 3 PM when Project Meeting occupies 3 PM","expected_intent":"create","expected_tool":"list_calendar_events","expected_outcome":"block","clarification_required":true},
+    {"id":"conflict-02","category":"CONFLICT","query":"Move yoga to 10 AM when Team Meeting runs 10 to 11","expected_intent":"update","expected_tool":"list_calendar_events","expected_outcome":"block","clarification_required":true},
+    {"id":"conflict-03","category":"CONFLICT","query":"Book DSA from 6 to 7 PM when ML Study already uses that hour","expected_intent":"create","expected_tool":"list_calendar_events","expected_outcome":"block","clarification_required":true},
+    {"id":"conflict-04","category":"CONFLICT","query":"Move all meetings one hour later when the new times overlap interviews","expected_intent":"bulk_update","expected_tool":"list_calendar_events","expected_outcome":"block","clarification_required":true},
+
+    {"id":"followup-01","category":"FOLLOW_UP","query":"8 PM","context":"The agent selected tomorrow's DSA session and asked what time to move it to.","expected_intent":"update","expected_tool":"update_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"followup-02","category":"FOLLOW_UP","query":"The second one","context":"The agent found two meetings and asked which should be deleted.","expected_intent":"delete","expected_tool":"delete_calendar_event","expected_outcome":"confirm","clarification_required":true},
+    {"id":"followup-03","category":"FOLLOW_UP","query":"Yes, proceed","context":"The agent displayed a bulk move proposal and requested confirmation.","expected_intent":"bulk_update","expected_tool":"update_calendar_event","expected_outcome":"execute","clarification_required":false},
+    {"id":"followup-04","category":"FOLLOW_UP","query":"No, cancel it","context":"The agent displayed a deletion proposal and requested confirmation.","expected_intent":"delete","expected_tool":"none","expected_outcome":"cancel","clarification_required":false},
+    {"id":"followup-05","category":"FOLLOW_UP","query":"Use the 4 PM option","context":"The agent found a conflict and suggested 4 PM, 6 PM, and 7 PM.","expected_intent":"create","expected_tool":"create_calendar_event","expected_outcome":"execute","clarification_required":false}
+  ]
+}
