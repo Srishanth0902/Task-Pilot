@@ -18,5 +18,12 @@ langchain==1.4.0
 langgraph==1.2.11
 langchain-openai==1.6.2
 
+# Week 5: HTTP API, server, and conversational web UI.
+fastapi==0.141.1
+uvicorn==0.52.4
+streamlit==1.63.0
+httpx==0.28.1
+requests==2.34.2
+
 # IANA timezone database for Windows and other systems without OS tzdata.
 tzdata==2026.2

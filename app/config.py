@@ -50,6 +50,13 @@ OPENROUTER_BASE_URL = os.getenv(
     "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
 ).strip()
 
+# Local Week 5 application services.
+API_HOST = os.getenv("API_HOST", "127.0.0.1").strip()
+API_PORT = int(os.getenv("API_PORT", "8000"))
+TASK_PILOT_API_URL = os.getenv(
+    "TASK_PILOT_API_URL", f"http://{API_HOST}:{API_PORT}"
+).rstrip("/")
+
 # Full calendar access: later weeks need to update and delete events, and
 # widening the scope after the fact would force every user to consent again.
 SCOPES = ["https://www.googleapis.com/auth/calendar"]

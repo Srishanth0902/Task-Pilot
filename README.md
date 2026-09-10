@@ -3,9 +3,9 @@
 An agentic calendar assistant that turns natural-language requests into safe,
 structured Google Calendar operations.
 
-**Status:** Weeks 1-4 are complete. The live Google Calendar integration and
-OpenRouter/Qwen model run through a stateful LangGraph agent with guarded bulk
-operations, conflict handling, and free-time scheduling.
+**Status:** Weeks 1-5 are complete. Task Pilot now has a tested FastAPI backend
+and Streamlit chat application around the live LangGraph, OpenRouter/Qwen, and
+Google Calendar workflow.
 
 ## Roadmap
 
@@ -15,11 +15,16 @@ operations, conflict handling, and free-time scheduling.
 | 2 | Structured CRUD, Pydantic schemas, LangChain tools, relative dates | Implemented and offline-tested |
 | 3 | Stateful LangGraph workflow and follow-up context | Implemented and tested |
 | 4 | Bulk operations, conflicts, confirmations, and free slots | Implemented and live-tested |
-| 5 | Interface and polish | Planned |
+| 5 | FastAPI backend, Streamlit UI, and application testing | Implemented and live-tested |
 
 ## Architecture
 
 ```text
+Streamlit -> FastAPI -> LangGraph -> Calendar tools -> Google Calendar
+                         |
+                         +----------> OpenRouter / Qwen
+
+LangGraph:
 START -> Understand query -> Search needed?
                               | yes            | no
                               v                v
@@ -42,6 +47,8 @@ workflow testable using scripted fakes.
 Task-Pilot/
 |-- app/
 |   |-- agent.py              # compatibility entry points for the graph
+|   |-- api.py                # FastAPI routes, schemas, and lazy shared runtime
+|   |-- api_client.py         # typed Streamlit-to-FastAPI HTTP client
 |   |-- graph_agent.py        # state, nodes, routing, memory, and conversation API
 |   |-- calendar_service.py   # Google OAuth and structured Calendar CRUD
 |   |-- calendar_tools.py     # five LangChain StructuredTool definitions
@@ -52,6 +59,7 @@ Task-Pilot/
 |   |-- scheduling.py         # conflicts, gaps, and bulk-change planning
 |   `-- schemas.py            # Pydantic input contracts
 |-- tests/                    # offline service, schema, tool, date, and agent tests
+|-- streamlit_app.py          # chat UI, history, confirmations, event display
 |-- requirements.txt
 |-- .env.example
 |-- .gitignore
@@ -217,6 +225,59 @@ earliest fitting slot, and asks for confirmation before creating anything.
 The default free-time window is 08:00-21:00 in `TIMEZONE`; override it with
 `WORKDAY_START_HOUR` and `WORKDAY_END_HOUR`.
 
+## Week 5 application
+
+The FastAPI backend exposes validated request and response contracts:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /chat` | Send a natural-language request or `yes`/`no` follow-up |
+| `GET /events` | Return upcoming structured calendar events |
+| `GET /health` | Report service configuration without contacting external APIs |
+
+`POST /chat` accepts:
+
+```json
+{
+  "message": "Move all meetings tomorrow by 30 minutes",
+  "thread_id": "optional-stable-conversation-id"
+}
+```
+
+When `thread_id` is omitted, the backend generates one and returns it. The
+Streamlit frontend retains that ID in session state so LangGraph confirmation
+and clarification turns resume the correct checkpoint. API initialization is
+lazy: `/health` never triggers OAuth, and `/events` does not require the LLM.
+
+The Streamlit interface includes chat history, a timed loading spinner,
+confirmation/cancel buttons, event and conflict displays, alternative slots,
+an upcoming-events sidebar, backend status checking, and a new-conversation
+control.
+
+### Run the complete application
+
+Install dependencies once:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+```
+
+Start the backend in terminal 1:
+
+```powershell
+python -m uvicorn app.api:app --host 127.0.0.1 --port 8000
+```
+
+Start the frontend in terminal 2:
+
+```powershell
+python -m streamlit run streamlit_app.py
+```
+
+Open `http://localhost:8501`. Interactive API documentation is available at
+`http://127.0.0.1:8000/docs`.
+
 ## OpenRouter model configuration
 
 The live model is constructed in `app/llm.py`. OpenRouter's OpenAI-compatible
@@ -262,6 +323,9 @@ Copy `.env.example` to `.env` if you want to override defaults.
 | `OPENROUTER_API_KEY` | none | Secret API key; required for live LLM calls |
 | `OPENROUTER_MODEL` | `qwen/qwen3-30b-a3b` | Switchable OpenRouter model slug |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenRouter API endpoint |
+| `API_HOST` | `127.0.0.1` | FastAPI bind host |
+| `API_PORT` | `8000` | FastAPI bind port |
+| `TASK_PILOT_API_URL` | `http://127.0.0.1:8000` | Backend URL used by Streamlit |
 
 ## Live verification and remaining acceptance checks
 
@@ -297,3 +361,9 @@ Also verified on September 10, 2026:
   bulk-deleted after a second confirmation. A free slot was found and created
   only after approval. A deliberately conflicting 6 PM request was blocked and
   alternatives were returned. All disposable events were removed afterward.
+- Week 5 backend tests validate all three endpoints, request rejection, response
+  filtering, error translation, thread IDs, and lazy service isolation. The
+  real `/events` and `/chat` routes succeeded against Google Calendar and Qwen.
+  Uvicorn and Streamlit were each started as real local servers and returned
+  HTTP 200. Streamlit's simulated UI test also renders with no backend call or
+  application exception.
