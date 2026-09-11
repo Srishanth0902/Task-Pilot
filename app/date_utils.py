@@ -188,6 +188,86 @@ def parse_datetime_expression(
     )
 
 
+def infer_local_time_window(
+    expression: str,
+    *,
+    now: datetime | None = None,
+    timezone_name: str = TIMEZONE,
+    start_hour: int = 8,
+    end_hour: int = 21,
+) -> tuple[datetime, datetime] | None:
+    """Infer a local day/range for availability requests.
+
+    This deterministic safety net supports phrases such as ``tomorrow after
+    6 PM``, ``Monday before 2 PM``, and ``Friday between 10 AM and 1 PM``.
+    If no day can be identified, ``None`` is returned so the conversation can
+    ask a useful clarification.
+    """
+    if not isinstance(expression, str) or not expression.strip():
+        return None
+
+    text = " ".join(expression.strip().lower().split())
+    reference = ensure_aware(now, timezone_name) if now else local_now(timezone_name)
+    zone = get_timezone(timezone_name)
+
+    if re.search(r"\btomorrow\b", text):
+        target_date = (reference + timedelta(days=1)).date()
+    elif re.search(r"\btoday\b", text):
+        target_date = reference.date()
+    else:
+        iso_date = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
+        weekday = re.search(
+            r"\b(?P<next>next\s+)?(?P<weekday>" + "|".join(WEEKDAYS) + r")\b",
+            text,
+        )
+        if iso_date:
+            target_date = datetime.fromisoformat(iso_date.group(1)).date()
+        elif weekday:
+            target_weekday = WEEKDAYS[weekday.group("weekday")]
+            days = (target_weekday - reference.weekday()) % 7
+            if weekday.group("next") and days == 0:
+                days = 7
+            target_date = (reference + timedelta(days=days)).date()
+        else:
+            return None
+
+    window_start = datetime.combine(target_date, time(start_hour), tzinfo=zone)
+    window_end = datetime.combine(target_date, time(end_hour), tzinfo=zone)
+    clock_token = r"\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?"
+
+    between = re.search(
+        rf"\bbetween\s+(?P<start>{clock_token})\s+and\s+(?P<end>{clock_token})",
+        text,
+        re.IGNORECASE,
+    )
+    if between:
+        start_clock = _parse_clock(between.group("start"), time(start_hour))
+        end_clock = _parse_clock(between.group("end"), time(end_hour))
+        window_start = datetime.combine(target_date, start_clock, tzinfo=zone)
+        window_end = datetime.combine(target_date, end_clock, tzinfo=zone)
+    else:
+        lower_bound = re.search(
+            rf"\b(?:after|from|at)\s+(?P<clock>{clock_token})",
+            text,
+            re.IGNORECASE,
+        )
+        upper_bound = re.search(
+            rf"\b(?:before|until)\s+(?P<clock>{clock_token})",
+            text,
+            re.IGNORECASE,
+        )
+        if lower_bound:
+            clock = _parse_clock(lower_bound.group("clock"), time(start_hour))
+            window_start = datetime.combine(target_date, clock, tzinfo=zone)
+        if upper_bound:
+            clock = _parse_clock(upper_bound.group("clock"), time(end_hour))
+            window_end = datetime.combine(target_date, clock, tzinfo=zone)
+
+    if window_end <= window_start:
+        raise ValueError("The requested availability range ends before it starts.")
+    return window_start, window_end
+
+
 def coerce_datetime(value: datetime | str) -> datetime:
     """Pydantic validator helper accepting aware datetimes or date phrases."""
     if isinstance(value, datetime):

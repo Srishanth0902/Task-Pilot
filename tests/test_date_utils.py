@@ -5,6 +5,7 @@ from zoneinfo import ZoneInfo
 from app.date_utils import (
     format_local_datetime,
     format_local_range,
+    infer_local_time_window,
     parse_datetime_expression,
 )
 
@@ -63,6 +64,17 @@ class NaturalDateTests(unittest.TestCase):
             ),
             "Friday, 11 September 2026, 7:00 AM–8:00 AM IST",
         )
+
+    def test_tomorrow_after_6_pm_becomes_an_ist_window(self):
+        start, end = infer_local_time_window(
+            "Show slots tomorrow after 6 PM", now=self.now
+        )
+
+        self.assertEqual(start.isoformat(), "2026-08-25T18:00:00+05:30")
+        self.assertEqual(end.isoformat(), "2026-08-25T21:00:00+05:30")
+
+    def test_availability_range_requires_a_day(self):
+        self.assertIsNone(infer_local_time_window("after 6 PM", now=self.now))
 
     def test_unsupported_text_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported date expression"):

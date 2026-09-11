@@ -184,11 +184,15 @@ What is on my calendar tomorrow?
 Move my ML class to 8 PM
 Delete my gym session on Friday
 Move all study sessions tomorrow by 1 hour
+Show me the available slots tomorrow after 6 PM
 Find a 2-hour free slot tomorrow and schedule DSA practice
 ```
 
 When several events match, Task Pilot asks which one. When a proposed create or
 move overlaps another event, it blocks the operation and offers alternatives.
+Availability-only questions return readable one-hour choices by default and do
+not create anything. Phrases such as "tomorrow after 6 PM" are resolved
+deterministically in IST even if the selected model omits structured range data.
 
 ## Agent workflow and logging
 

@@ -22,7 +22,13 @@ from pydantic import BaseModel, Field
 
 from app.calendar_tools import build_calendar_tools
 from app.config import TIMEZONE, WORKDAY_END_HOUR, WORKDAY_START_HOUR
-from app.date_utils import ensure_aware, format_local_datetime, format_local_range, local_now
+from app.date_utils import (
+    ensure_aware,
+    format_local_datetime,
+    format_local_range,
+    infer_local_time_window,
+    local_now,
+)
 from app.observability import log_workflow, safe_error_detail
 from app.scheduling import (
     build_bulk_changes,
@@ -115,10 +121,13 @@ Rules:
   and date bounds. For "all tasks", "all events", or "everything", omit
   search_query so every event in the requested range is listed. Bulk actions
   are only plans until the graph gets confirmation.
-- Use free_slot when asked to find availability and schedule something. Supply
-  title, duration_minutes, and the requested day's time_min/time_max. The graph
-  uses the configured {WORKDAY_START_HOUR:02d}:00-{WORKDAY_END_HOUR:02d}:00
-  local scheduling window and asks before creating.
+- Use free_slot for both availability questions and requests to find a time and
+  schedule something. Always supply the requested day's time_min/time_max. For
+  scheduling, also supply title and duration_minutes. The graph uses the
+  configured {WORKDAY_START_HOUR:02d}:00-{WORKDAY_END_HOUR:02d}:00 local window.
+- "What slots are available tomorrow after 6 PM?" means tomorrow at 18:00
+  through the configured end of the workday. It is an availability question,
+  not permission to create an event.
 """
 
 
@@ -193,6 +202,55 @@ def _normalise_action_times(action: dict, query: str) -> None:
     )
     action["start_time"] = corrected_start.isoformat()
     action["end_time"] = (corrected_start + duration).isoformat()
+
+
+def _requests_free_slot_scheduling(query: str) -> bool:
+    """Distinguish listing availability from permission to create an event."""
+    return bool(
+        re.search(r"\b(?:schedule|book|create|add|put)\b", query, re.IGNORECASE)
+    )
+
+
+def _complete_free_slot_action(action: dict, query: str) -> None:
+    """Fill model-omitted free-slot details from explicit user language."""
+    if action.get("intent") != "free_slot":
+        return
+
+    if "availability_only" not in action:
+        action["availability_only"] = not _requests_free_slot_scheduling(query)
+    elif _requests_free_slot_scheduling(query):
+        action["availability_only"] = False
+
+    if not action.get("time_min") or not action.get("time_max"):
+        inferred = infer_local_time_window(
+            query,
+            now=local_now(),
+            start_hour=WORKDAY_START_HOUR,
+            end_hour=WORKDAY_END_HOUR,
+        )
+        if inferred:
+            action["time_min"] = inferred[0].isoformat()
+            action["time_max"] = inferred[1].isoformat()
+
+    # Availability lists use one-hour blocks unless the user requested another
+    # duration. Scheduling requests still require an explicit duration.
+    if action.get("availability_only") and not action.get("duration_minutes"):
+        action["duration_minutes"] = 60
+
+
+def _is_free_slot_range_followup(query: str) -> bool:
+    """Return whether a follow-up contains a usable day/range."""
+    try:
+        return bool(
+            infer_local_time_window(
+                query,
+                now=local_now(),
+                start_hour=WORKDAY_START_HOUR,
+                end_hour=WORKDAY_END_HOUR,
+            )
+        )
+    except ValueError:
+        return False
 
 
 def _generic_bulk_query(value: str | None) -> bool:
@@ -385,7 +443,15 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             }
 
         previous = state.get("pending_action")
-        continuing = bool(previous and plan.continue_previous)
+        deterministic_free_slot_followup = bool(
+            previous
+            and previous.get("intent") == "free_slot"
+            and plan.intent in {"free_slot", "unknown"}
+            and _is_free_slot_range_followup(query)
+        )
+        continuing = bool(
+            previous and (plan.continue_previous or deterministic_free_slot_followup)
+        )
         if continuing:
             action = {**previous, **_action_from_plan(plan)}
             if plan.intent == "unknown":
@@ -404,6 +470,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         _apply_followup_time(action, selected, query)
         try:
             _normalise_action_times(action, query)
+            _complete_free_slot_action(action, query)
         except ValueError as error:
             return {"error": f"Invalid event time: {error}"}
 
@@ -598,7 +665,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
 
     def find_free_slot(state: CalendarAgentState):
         action = dict(state.get("pending_action") or {})
-        if not action.get("title"):
+        availability_only = bool(action.get("availability_only"))
+        if not availability_only and not action.get("title"):
             return {"clarification": "What should I call the event?"}
         duration_minutes = action.get("duration_minutes")
         if not duration_minutes:
@@ -620,10 +688,32 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             window_start,
             window_end,
             timedelta(minutes=duration_minutes),
-            limit=3,
+            limit=6 if availability_only else 3,
         )
         if not slots:
+            if availability_only:
+                return {
+                    "tool_result": {
+                        "success": True,
+                        "count": 0,
+                        "slots": [],
+                        "duration_minutes": duration_minutes,
+                    },
+                    "alternatives": [],
+                    "verified": True,
+                }
             return {"clarification": "I could not find a suitable free slot in that window."}
+        if availability_only:
+            return {
+                "tool_result": {
+                    "success": True,
+                    "count": len(slots),
+                    "slots": slots,
+                    "duration_minutes": duration_minutes,
+                },
+                "alternatives": slots,
+                "verified": True,
+            }
         chosen = slots[0]
         create_action = {
             "intent": "create",
@@ -702,6 +792,15 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         if state.get("error"):
             return "handle_error"
         if state.get("clarification"):
+            return "generate_response"
+        return "request_confirmation"
+
+    def route_after_free_slot(state: CalendarAgentState) -> str:
+        if state.get("error"):
+            return "handle_error"
+        if state.get("clarification"):
+            return "generate_response"
+        if state.get("intent") == "free_slot":
             return "generate_response"
         return "request_confirmation"
 
@@ -917,6 +1016,22 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         elif intent == "unknown":
             text = "I could not determine the calendar action. Please rephrase the request."
             clear = False
+        elif intent == "free_slot":
+            slots = result.get("slots", [])
+            duration = result.get("duration_minutes", 60)
+            if not slots:
+                text = "I found no available slots in that time range."
+            else:
+                duration_label = (
+                    f"{duration // 60}-hour" if duration % 60 == 0
+                    else f"{duration}-minute"
+                )
+                rows = [
+                    f"{index}. {format_local_range(slot.get('start'), slot.get('end'))}"
+                    for index, slot in enumerate(slots, start=1)
+                ]
+                text = f"Available {duration_label} slots:\n" + "\n".join(rows)
+            clear = True
         elif not state.get("verified") and intent == "create":
             missing = []
             action = state.get("pending_action") or {}
@@ -1000,7 +1115,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
     workflow.add_conditional_edges("search_calendar", route_after_search)
     workflow.add_conditional_edges("resolve_event", route_after_resolve)
     workflow.add_conditional_edges("load_calendar_window", route_after_window_load)
-    workflow.add_conditional_edges("find_free_slot", route_after_planning)
+    workflow.add_conditional_edges("find_free_slot", route_after_free_slot)
     workflow.add_conditional_edges("plan_bulk_operation", route_after_planning)
     workflow.add_conditional_edges("detect_conflicts", route_after_conflict_check)
     workflow.add_edge("request_confirmation", END)
