@@ -245,6 +245,28 @@ timezone parsing, agent routing, ambiguous queries, conflicts, bulk
 confirmations, follow-up memory, FastAPI, Streamlit, evaluation scoring,
 logging redaction, and destructive-action safety.
 
+### Difficult prompt checks
+
+`evaluation/difficult_prompts.json` defines 32 single-turn and follow-up cases.
+Run the actual configured OpenRouter model and LangGraph against an in-memory
+calendar containing synthetic meetings, Yoga and study sessions:
+
+```powershell
+python -m evaluation.run_difficult_prompts
+```
+
+This uses OpenRouter credits but never connects to Google or changes real events.
+The runner checks intent, writes, exact times, matching-event counts, confirmation
+state and affected events where specified. Its synthetic-only report is saved to
+`evaluation/difficult_results.json`. Use `--ids rename free-evening` to rerun
+selected failures; the report then combines the latest result for each case.
+
+`tests/test_difficult_prompts.py` adds offline regression cases for imperfect
+model plans, ordinal selections, qualified confirmations, all-day conflicts,
+UTC/IST conversion, midnight and leap-year boundaries, multi-day availability,
+and recovery after errors. These are finite coverage, not a guarantee for every
+possible wording. Live model responses can vary between runs.
+
 ## Screenshots
 
 The running interface is available at `http://localhost:8501`. It labels all

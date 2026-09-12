@@ -1,0 +1,303 @@
+{
+  "reference_now": "2026-09-12T09:00:00+05:30",
+  "cases": [
+    {
+      "id": "create-basic",
+      "start": "2026-09-13T18:00:00+05:30",
+      "prompts": [
+        "Add DSA tomorrow at 6 PM for one hour"
+      ],
+      "expected_intent": "create",
+      "expected_mutation": "insert"
+    },
+    {
+      "id": "create-minutes",
+      "response_contains": "conflicts",
+      "prompts": [
+        "Book interview prep tomorrow at 7:15 AM for 45 minutes"
+      ],
+      "expected_intent": "create",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "create-midnight",
+      "start": "2026-09-14T00:00:00+05:30",
+      "prompts": [
+        "Add midnight reading on September 14 2026 at 12 AM for 30 minutes"
+      ],
+      "expected_intent": "create",
+      "expected_mutation": "insert"
+    },
+    {
+      "id": "create-noon",
+      "start": "2026-09-13T12:00:00+05:30",
+      "prompts": [
+        "Add lunch tomorrow at 12 PM for an hour"
+      ],
+      "expected_intent": "create",
+      "expected_mutation": "insert"
+    },
+    {
+      "id": "create-utc",
+      "start": "2026-09-13T23:30:00+05:30",
+      "prompts": [
+        "Add Call on September 13 2026 at 6 PM UTC for one hour"
+      ],
+      "expected_intent": "create",
+      "expected_mutation": "insert"
+    },
+    {
+      "id": "create-missing",
+      "prompts": [
+        "Add an event"
+      ],
+      "expected_intent": "create",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "unknown",
+      "prompts": [
+        "Do something useful with it"
+      ],
+      "expected_intent": "unknown",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "read-day",
+      "event_count": 5,
+      "prompts": [
+        "What is on my calendar tomorrow?"
+      ],
+      "expected_intent": "list",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "read-search",
+      "event_count": 2,
+      "prompts": [
+        "Find all my study sessions tomorrow"
+      ],
+      "expected_intent": "search",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "delete-ambiguous",
+      "confirmation": false,
+      "response_contains": "multiple",
+      "prompts": [
+        "Delete my meeting"
+      ],
+      "expected_intent": "delete",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "delete-single",
+      "confirmation": true,
+      "prompts": [
+        "Delete my Yoga tomorrow"
+      ],
+      "expected_intent": "delete",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "delete-id",
+      "prompts": [
+        "Delete event id yoga"
+      ],
+      "expected_intent": "delete",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "move-ambiguous",
+      "confirmation": false,
+      "response_contains": "multiple",
+      "prompts": [
+        "Move my meeting tomorrow"
+      ],
+      "expected_intent": "update",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "move-clock",
+      "start": "2026-09-13T08:00:00+05:30",
+      "prompts": [
+        "Move Yoga at 7 AM to 8 AM tomorrow"
+      ],
+      "expected_intent": "update",
+      "expected_mutation": "patch"
+    },
+    {
+      "id": "rename",
+      "response_contains": "Morning exercise",
+      "prompts": [
+        "Rename Yoga to Morning exercise"
+      ],
+      "expected_intent": "update",
+      "expected_mutation": "patch"
+    },
+    {
+      "id": "location",
+      "prompts": [
+        "Change Yoga location to Room 204"
+      ],
+      "expected_intent": "update",
+      "expected_mutation": "patch"
+    },
+    {
+      "id": "bulk-shift",
+      "confirmation": true,
+      "changes": 2,
+      "prompts": [
+        "Move all study sessions tomorrow by 1 hour"
+      ],
+      "expected_intent": "bulk_update",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "bulk-back",
+      "confirmation": false,
+      "response_contains": "conflict",
+      "changes": 2,
+      "prompts": [
+        "Move all study sessions tomorrow 30 minutes earlier"
+      ],
+      "expected_intent": "bulk_update",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "bulk-delete",
+      "confirmation": true,
+      "changes": 5,
+      "prompts": [
+        "Delete all my events tomorrow"
+      ],
+      "expected_intent": "bulk_delete",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "free-evening",
+      "response_contains": "6:00 PM",
+      "prompts": [
+        "I have to study for my interview, so can you give me the slots that are available tomorrow after 6 pm?"
+      ],
+      "expected_intent": "free_slot",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "free-duration",
+      "response_contains": "6:00 PM–8:00 PM",
+      "prompts": [
+        "Find two hours free tomorrow after 6 PM"
+      ],
+      "expected_intent": "free_slot",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "free-before",
+      "prompts": [
+        "Show free slots tomorrow before 10 AM"
+      ],
+      "expected_intent": "free_slot",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "free-between",
+      "prompts": [
+        "When am I free tomorrow between 10 AM and 1 PM?"
+      ],
+      "expected_intent": "free_slot",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "free-missing",
+      "response_contains": "Which day",
+      "prompts": [
+        "Find free slots"
+      ],
+      "expected_intent": "free_slot",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "free-schedule",
+      "confirmation": true,
+      "changes": 1,
+      "prompts": [
+        "Find a 1-hour free slot tomorrow after 6 PM and schedule Interview preparation"
+      ],
+      "expected_intent": "create",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "conflict",
+      "response_contains": "conflicts",
+      "prompts": [
+        "Schedule a task tomorrow at 10 AM for one hour"
+      ],
+      "expected_intent": "create",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "delete-second",
+      "confirmation": true,
+      "event_id": "meeting2",
+      "response_contains": "Team meeting",
+      "prompts": [
+        "Delete my meeting",
+        "The second one"
+      ],
+      "expected_intent": "delete",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "delete-confirm",
+      "prompts": [
+        "Delete Yoga",
+        "Yes, proceed"
+      ],
+      "expected_intent": "delete",
+      "expected_mutation": "delete"
+    },
+    {
+      "id": "delete-cancel",
+      "response_contains": "Cancelled",
+      "confirmation": false,
+      "prompts": [
+        "Delete Yoga",
+        "No, cancel it"
+      ],
+      "expected_intent": "delete",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "move-followup",
+      "start": "2026-09-13T20:00:00+05:30",
+      "prompts": [
+        "Move Yoga tomorrow",
+        "8 PM"
+      ],
+      "expected_intent": "update",
+      "expected_mutation": "patch"
+    },
+    {
+      "id": "free-followup",
+      "prompts": [
+        "Find free slots",
+        "Tomorrow and after 6 PM"
+      ],
+      "expected_intent": "free_slot",
+      "expected_mutation": "none"
+    },
+    {
+      "id": "bulk-conditional",
+      "confirmation": true,
+      "changes": 2,
+      "response_contains": "yes",
+      "prompts": [
+        "Move all study sessions tomorrow by 1 hour",
+        "Yes, but only the first one"
+      ],
+      "expected_intent": "bulk_update",
+      "expected_mutation": "none"
+    }
+  ]
+}

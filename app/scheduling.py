@@ -9,10 +9,10 @@ from app.date_utils import ensure_aware, get_timezone
 
 
 def event_interval(event: dict) -> tuple[datetime, datetime] | None:
-    """Return a timed event interval; all-day or incomplete events return None."""
+    """Return an interval, including Google's exclusive all-day end date."""
     start = event.get("start")
     end = event.get("end")
-    if not start or not end or "T" not in start or "T" not in end:
+    if not start or not end:
         return None
     return ensure_aware(datetime.fromisoformat(start)), ensure_aware(
         datetime.fromisoformat(end)
@@ -31,6 +31,8 @@ def overlapping_events(
     matches = []
     for event in events:
         if event.get("event_id") in excluded:
+            continue
+        if event.get("status") == "cancelled" or event.get("transparency") == "transparent":
             continue
         interval = event_interval(event)
         if interval and interval[0] < end and start < interval[1]:
@@ -79,6 +81,8 @@ def find_free_slots(
     busy = []
     for event in events:
         if exclude_event_ids and event.get("event_id") in exclude_event_ids:
+            continue
+        if event.get("status") == "cancelled" or event.get("transparency") == "transparent":
             continue
         interval = event_interval(event)
         if not interval:
@@ -144,6 +148,9 @@ def build_bulk_changes(events: list[dict], action: dict) -> list[dict]:
 
     changes = []
     for event in events:
+        # Bulk time shifts cannot silently turn an all-day event into a timed one.
+        if "T" not in (event.get("start") or ""):
+            continue
         interval = event_interval(event)
         if not interval or not event.get("event_id"):
             continue
