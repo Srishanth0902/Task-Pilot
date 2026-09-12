@@ -341,6 +341,27 @@ Public multi-user hosting requires web OAuth redirects and encrypted per-user
 token storage; the current Desktop OAuth flow is intentionally scoped to this
 single-user project.
 
+## Conversation regression coverage
+
+The planner receives the last 12 conversation messages, including completed actions.
+Bare clock times retain an established PM interpretation; an ambiguous time that
+would otherwise create an event earlier today asks for AM/PM clarification.
+Questions such as “What are my next tasks right now?” list remaining events.
+
+Explicit requests such as “Move Yoga to 11 PM and keep Homework at 9:50 PM”
+produce a reviewed plan containing both changes. Existing event durations are
+preserved, including moves across midnight. Plans require confirmation and are
+rechecked before execution. Duplicate matches, overlapping destinations, and
+swaps requiring a temporary slot are rejected without writes. Up to five actions
+are supported in a coordinated plan; this is not a general-purpose arbitrary
+calendar optimizer. Calendar writes are not transactional; partial failures are
+reported rather than retried automatically.
+
+Run deterministic regressions with `python -m unittest tests.test_conversation_repairs`.
+Run `python -m evaluation.run_conversation_repairs` to replay the conversation
+against the configured OpenRouter model using an in-memory calendar. The latter
+uses model credits but never contacts Google Calendar.
+
 ## Future improvements
 
 - Replace in-memory LangGraph checkpoints with PostgreSQL or Redis.
