@@ -201,6 +201,7 @@ The browser tests use synthetic API responses and do not change Google Calendar.
 
 ```text
 Add DSA tomorrow at 6 PM
+Schedule an urgent meeting tomorrow at 6 PM and move Yoga to the next available slot
 What is on my calendar tomorrow?
 Move my ML class to 8 PM
 Delete my gym session on Friday
@@ -214,6 +215,23 @@ move overlaps another event, it blocks the operation and offers alternatives.
 Availability-only questions return readable one-hour choices by default and do
 not create anything. Phrases such as "tomorrow after 6 PM" are resolved
 deterministically in IST even if the selected model omits structured range data.
+
+### Making room for urgent events
+
+An urgent create request can propose moving the occupying events into free slots
+later that day. The proposal preserves their durations and requires confirmation.
+Explicit instructions to move a named conflicting event to the next available slot
+authorize that move without a second confirmation; extra affected events still
+require review. Specify a replacement day to search that day instead (up to 31
+days ahead). No event is deleted to make room, and no changes are made if a full
+replacement plan cannot be found.
+
+The agent rechecks the reviewed schedule, moves the occupying events, then creates
+the new event. Google Calendar does not provide an atomic transaction across these
+operations: on failure the agent stops and reports completed moves, without
+automatically retrying or claiming to have undone them. External edits can still
+race with execution. This workflow currently handles a new event plus relocation
+of its conflicts, not arbitrary chains of moves across an entire calendar.
 
 ## Agent workflow and logging
 

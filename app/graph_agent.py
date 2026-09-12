@@ -30,6 +30,7 @@ from app.date_utils import (
     local_now,
 )
 from app.observability import log_workflow, safe_error_detail
+from app.rescheduling import relocation_plan
 from app.scheduling import (
     build_bulk_changes,
     day_window,
@@ -55,6 +56,9 @@ class QueryPlan(BaseModel):
     """Structured interpretation returned by the LLM."""
 
     intent: Intent
+    conflict_strategy: Literal["alternatives", "propose_relocation", "relocate"] | None = None
+    displacement_query: str | None = None
+    relocation_date: str | None = None
     search_query: str | None = None
     event_id: str | None = None
     title: str | None = None
@@ -104,6 +108,16 @@ be safely inferred. Resolve relative dates to timezone-aware ISO-8601.
 Rules:
 - create needs title and start_time; end_time defaults to one hour later.
 - list means list upcoming events. search means find events without changing.
+- To fit a NEW urgent event into an occupied slot, use create for the new event.
+  Set conflict_strategy=propose_relocation when urgency/rearranging is mentioned
+  without explicit permission to move existing events. Set conflict_strategy=relocate
+  only when the user explicitly instructs moving the existing conflicting event
+  to the next available slot; displacement_query identifies that event (e.g. Yoga).
+  This coordinated create-plus-relocate request IS supported as one workflow.
+  Never delete an existing event to make room. Relocation searches later the same
+  day within working hours, preserves duration and requires a new choice if full.
+  If the user explicitly chooses another day for the displaced event, set
+  relocation_date=YYYY-MM-DD and preserve the NEW event's original start/end.
 - "Rename X to Y" is update, search_query=X, title=Y. Never use search
   as the final intent for a rename or location/description change.
 - For vague or unsupported requests, return intent=unknown. Do not omit the
@@ -514,6 +528,29 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             candidates = []
             selected = None
 
+        # An explicit follow-up can authorize relocating the preserved conflict.
+        move_existing = bool(re.search(r"\b(?:move|shift|reschedule)\b", query, re.I))
+        next_slot = bool(re.search(r"\b(?:next|available|free)\b.*\b(?:slot|time)\b", query, re.I))
+        negated = bool(re.search(r"\b(?:not|don't|do not|never)\b", query, re.I))
+        if previous and state.get("conflict_events") and move_existing and next_slot and not negated:
+            action = {**previous, "conflict_strategy": "relocate"}
+            if plan.relocation_date:
+                action["relocation_date"] = plan.relocation_date
+            action["start_time"] = previous.get("start_time") or previous.get("previous_start")
+            action["end_time"] = previous.get("end_time") or previous.get("previous_end")
+        if action.get("intent") == "create":
+            if negated and move_existing:
+                action["conflict_strategy"] = "alternatives"
+            if move_existing and next_slot and not negated:
+                action["conflict_strategy"] = "relocate"
+                named = [e.get("title", "") for e in state.get("conflict_events", []) if e.get("title", "").casefold() in query.casefold()]
+                if len(named) == 1:
+                    action["displacement_query"] = named[0]
+            if action.get("conflict_strategy") == "relocate":
+                action["relocation_authorized"] = move_existing and next_slot and not negated
+            if re.search(r"\burgent\b|\brearrange\b", query, re.I) and not action.get("conflict_strategy"):
+                action["conflict_strategy"] = "propose_relocation"
+
         if action.get("search_query"):
             action["search_query"] = re.sub(
                 r"\s+(?:sessions?|tasks?|events?)$", "", action["search_query"], flags=re.I
@@ -555,6 +592,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         if state.get("confirmation_status") == "declined":
             return "generate_response"
         if state.get("confirmation_status") == "approved":
+            if action.get("coordinated"):
+                return "execute_relocation"
             if action.get("intent") in {"bulk_update", "bulk_delete"}:
                 return "execute_bulk_action"
             if action.get("intent") in {"create", "update"} and action.get("start_time"):
@@ -904,6 +943,29 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         if not conflicts:
             return {"conflict_events": [], "alternatives": []}
 
+        if action.get("intent") == "create" and action.get("conflict_strategy") in {"relocate", "propose_relocation"}:
+            if len(result.get("events", [])) >= 250:
+                return {"clarification": "There are too many events to safely rearrange this window. Please narrow the request."}
+            action["end_time"] = end.isoformat()
+            try:
+                planning_events = list(result.get("events", []))
+                if action.get("relocation_date") and action["relocation_date"] != start.date().isoformat():
+                    target_start, target_end = day_window(datetime.fromisoformat(action["relocation_date"]))
+                    extra = invoke_tool(state, "list_calendar_events", {"max_results": 250, "time_min": target_start, "time_max": target_end})
+                    if not extra.get("success") or len(extra.get("events", [])) >= 250:
+                        return {"error": "Could not safely check the replacement day. Nothing was changed."}
+                    planning_events.extend(extra.get("events", []))
+                changes = relocation_plan(planning_events, conflicts, action)
+            except Exception as error:
+                return {"pending_action": action, "conflict_events": conflicts, "clarification": safe_error_detail(error)}
+            action["coordinated"] = True
+            # Permission to move Yoga does not authorize moving another event too.
+            target = (action.get("displacement_query") or "").casefold()
+            exact_scope = bool(target) and all(target in e.get("title", "").casefold() for e in conflicts)
+            action["relocation_authorized"] = bool(action.get("relocation_authorized") and exact_scope)
+            return {"pending_action": action, "conflict_events": conflicts,
+                    "affected_events": conflicts, "proposed_changes": changes}
+
         window_start, window_end = working_window(start)
         alternative_start = max(end, window_start)
         alternatives = (
@@ -931,7 +993,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             "conflict_events": conflicts,
             "alternatives": alternatives,
             "clarification": f"That time conflicts with {conflict_names}. "
-            f"Available alternatives: {options}. Which time should I use?",
+            f"Available alternatives: {options}. Which time should I use? "
+            "You can also ask me to move the existing event to the next available slot.",
         }
 
     def route_after_conflict_check(state: CalendarAgentState) -> str:
@@ -939,7 +1002,59 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return "handle_error"
         if state.get("clarification"):
             return "generate_response"
+        action = state.get("pending_action") or {}
+        if action.get("coordinated"):
+            return "execute_relocation" if action.get("relocation_authorized") else "request_confirmation"
         return "execute_action"
+
+    def execute_relocation(state: CalendarAgentState):
+        """Recheck the reviewed plan, then move blockers before creating.
+
+        Google Calendar is not transactional. Stop at the first failure and
+        report completed moves; never retry or claim an automatic rollback.
+        """
+        action = state.get("pending_action") or {}
+        changes = state.get("proposed_changes", [])
+        completed = []
+        try:
+            day_start, day_end = day_window(_plan_datetime(action["start_time"]))
+            latest_end = max(_plan_datetime(c["new_end"]) for c in changes)
+            day_end = max(day_end, day_window(latest_end)[1])
+            current = invoke_tool(state, "list_calendar_events", {"max_results": 250, "time_min": day_start, "time_max": day_end})
+            if not current.get("success"):
+                raise ValueError("Could not recheck the calendar. No changes were made.")
+            events = current.get("events", [])
+            if len(events) >= 250:
+                raise ValueError("The calendar window is too large to safely verify. No changes were made.")
+            by_id = {e.get("event_id"): e for e in events}
+            moving = {c["event_id"] for c in changes if c["action"] == "update"}
+            for change in changes:
+                if change["action"] == "update":
+                    old = by_id.get(change["event_id"], {})
+                    if old.get("start") != change["old_start"] or old.get("end") != change["old_end"]:
+                        raise ValueError("The calendar changed since planning. Please request a fresh plan; nothing was changed.")
+                if overlapping_events(events, _plan_datetime(change["new_start"]), _plan_datetime(change["new_end"]), exclude_event_ids=moving):
+                    raise ValueError("A proposed time is now occupied. Please request a fresh plan; nothing was changed.")
+            for change in changes:
+                if change["action"] == "update":
+                    result = invoke_tool(state, "update_calendar_event", {"event_id": change["event_id"], "start_time": change["new_start"], "end_time": change["new_end"]})
+                else:
+                    result = invoke_tool(state, "create_calendar_event", {k: v for k, v in action.items() if k in {"title", "start_time", "end_time", "description", "location"} and v is not None})
+                if not result.get("success") or not result.get("event_id"):
+                    raise ValueError("A calendar operation failed. Check your calendar before retrying.")
+                completed.append(change)
+            text = "Schedule updated:\n" + "\n".join(
+                f"{'Moved' if c['action'] == 'update' else 'Created'} {c['title']} — {format_local_range(c['new_start'], c['new_end'])}" for c in completed)
+            return {"messages": [AIMessage(content=text)], "response": text, "verified": True,
+                    "pending_action": None, "proposed_changes": [], "conflict_events": [],
+                    "awaiting_confirmation": False, "tool_result": {"success": True, "results": completed}}
+        except Exception as error:
+            detail = safe_error_detail(error)
+            done = "; ".join(f"Moved {c['title']} to {format_local_range(c['new_start'], c['new_end'])}" for c in completed)
+            text = f"Could not finish rearranging: {detail}" + (f" Completed: {done}. These moves have not been undone." if done else " No changes were confirmed; check the calendar if a request timed out.")
+            return {"messages": [AIMessage(content=text)], "response": text, "error": detail,
+                    "verified": False, "pending_action": None, "proposed_changes": [],
+                    "awaiting_confirmation": False, "tool_result": {"success": False, "results": completed}}
 
     def request_confirmation(state: CalendarAgentState):
         changes = list(state.get("proposed_changes", []))
@@ -1172,6 +1287,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
     workflow.add_node("find_free_slot", traced_node("find_free_slot", find_free_slot))
     workflow.add_node("plan_bulk_operation", traced_node("plan_bulk_operation", plan_bulk_operation))
     workflow.add_node("detect_conflicts", traced_node("detect_conflicts", detect_conflicts))
+    workflow.add_node("execute_relocation", traced_node("execute_relocation", execute_relocation))
+    workflow.add_edge("execute_relocation", END)
     workflow.add_node("request_confirmation", traced_node("request_confirmation", request_confirmation))
     workflow.add_node("execute_bulk_action", traced_node("execute_bulk_action", execute_bulk_action))
     workflow.add_node("execute_action", traced_node("execute_action", execute_action))
