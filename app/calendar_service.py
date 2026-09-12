@@ -83,6 +83,7 @@ def _normalise_event(event):
         "location": event.get("location"),
         "html_link": event.get("htmlLink"),
         "status": event.get("status"),
+        "transparency": event.get("transparency", "opaque"),
     }
 
 

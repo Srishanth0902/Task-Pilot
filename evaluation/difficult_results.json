@@ -1,0 +1,1002 @@
+{
+  "reference_now": "2026-09-12T09:00:00+05:30",
+  "total": 32,
+  "passed": 32,
+  "results": [
+    {
+      "id": "create-basic",
+      "passed": true,
+      "intent": "create",
+      "checks": {
+        "start": true
+      },
+      "mutations": [
+        "insert"
+      ],
+      "responses": [
+        "Created DSA \u2014 Sunday, 13 September 2026, 6:00 PM\u20137:00 PM IST."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-14T00:00:00+05:30"
+          }
+        ],
+        [
+          "insert",
+          {
+            "calendarId": "primary",
+            "body": {
+              "summary": "DSA",
+              "start": {
+                "dateTime": "2026-09-13T18:00:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              },
+              "end": {
+                "dateTime": "2026-09-13T19:00:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              }
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "create-minutes",
+      "passed": true,
+      "intent": "create",
+      "checks": {
+        "response": true
+      },
+      "mutations": [],
+      "responses": [
+        "That time conflicts with Yoga. Available alternatives: Sunday, 13 September 2026, 8:00 AM\u20138:45 AM IST, Sunday, 13 September 2026, 8:45 AM\u20139:30 AM IST, Sunday, 13 September 2026, 11:00 AM\u201311:45 AM IST. Which time should I use?"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-14T00:00:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "create-midnight",
+      "passed": true,
+      "intent": "create",
+      "checks": {
+        "start": true
+      },
+      "mutations": [
+        "insert"
+      ],
+      "responses": [
+        "Created midnight reading \u2014 Monday, 14 September 2026, 12:00 AM\u201312:30 AM IST."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-14T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-15T00:00:00+05:30"
+          }
+        ],
+        [
+          "insert",
+          {
+            "calendarId": "primary",
+            "body": {
+              "summary": "midnight reading",
+              "start": {
+                "dateTime": "2026-09-14T00:00:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              },
+              "end": {
+                "dateTime": "2026-09-14T00:30:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              }
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "create-noon",
+      "passed": true,
+      "intent": "create",
+      "checks": {
+        "start": true
+      },
+      "mutations": [
+        "insert"
+      ],
+      "responses": [
+        "Created lunch \u2014 Sunday, 13 September 2026, 12:00 PM\u20131:00 PM IST."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-14T00:00:00+05:30"
+          }
+        ],
+        [
+          "insert",
+          {
+            "calendarId": "primary",
+            "body": {
+              "summary": "lunch",
+              "start": {
+                "dateTime": "2026-09-13T12:00:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              },
+              "end": {
+                "dateTime": "2026-09-13T13:00:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              }
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "create-utc",
+      "passed": true,
+      "intent": "create",
+      "checks": {
+        "start": true
+      },
+      "mutations": [
+        "insert"
+      ],
+      "responses": [
+        "Created Call \u2014 Sunday, 13 September 2026 at 11:30 PM IST to Monday, 14 September 2026 at 12:30 AM IST."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-14T00:00:00+05:30"
+          }
+        ],
+        [
+          "insert",
+          {
+            "calendarId": "primary",
+            "body": {
+              "summary": "Call",
+              "start": {
+                "dateTime": "2026-09-13T23:30:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              },
+              "end": {
+                "dateTime": "2026-09-14T00:30:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              }
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "create-missing",
+      "passed": true,
+      "intent": "create",
+      "checks": {},
+      "mutations": [],
+      "responses": [
+        "Please provide a title and a start time."
+      ],
+      "calls": []
+    },
+    {
+      "id": "unknown",
+      "passed": true,
+      "intent": "unknown",
+      "checks": {},
+      "mutations": [],
+      "responses": [
+        "I could not determine the calendar action. Please rephrase the request."
+      ],
+      "calls": []
+    },
+    {
+      "id": "read-day",
+      "passed": true,
+      "intent": "list",
+      "checks": {
+        "event_count": true
+      },
+      "mutations": [],
+      "responses": [
+        "I found:\n1. Yoga \u2014 Sunday, 13 September 2026, 7:00 AM\u20138:00 AM IST\n2. Project meeting \u2014 Sunday, 13 September 2026, 10:00 AM\u201311:00 AM IST\n3. DSA study \u2014 Sunday, 13 September 2026, 1:00 PM\u20132:00 PM IST\n4. Team meeting \u2014 Sunday, 13 September 2026, 3:00 PM\u20134:00 PM IST\n5. ML study \u2014 Sunday, 13 September 2026, 4:00 PM\u20135:00 PM IST"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T23:59:59+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "read-search",
+      "passed": true,
+      "intent": "search",
+      "checks": {
+        "event_count": true
+      },
+      "mutations": [],
+      "responses": [
+        "I found:\n1. DSA study \u2014 Sunday, 13 September 2026, 1:00 PM\u20132:00 PM IST\n2. ML study \u2014 Sunday, 13 September 2026, 4:00 PM\u20135:00 PM IST"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "study",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T23:59:59+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "delete-ambiguous",
+      "passed": true,
+      "intent": "delete",
+      "checks": {
+        "confirmation": true,
+        "response": true
+      },
+      "mutations": [],
+      "responses": [
+        "I found multiple matching events: 1. Project meeting at Sunday, 13 September 2026 at 10:00 AM IST; 2. Team meeting at Sunday, 13 September 2026 at 3:00 PM IST. Which one do you mean?"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "meeting",
+            "timeMin": "2026-09-12T07:41:07.570266+00:00",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "delete-single",
+      "passed": true,
+      "intent": "delete",
+      "checks": {
+        "confirmation": true
+      },
+      "mutations": [],
+      "responses": [
+        "Proposed changes:\n1. Delete Yoga \u2014 Sunday, 13 September 2026, 7:00 AM\u20138:00 AM IST\nProceed? (yes/no)"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "Yoga",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T23:59:59+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "delete-id",
+      "passed": true,
+      "intent": "delete",
+      "checks": {},
+      "mutations": [],
+      "responses": [
+        "Proposed changes:\n1. Delete calendar event \u2014 Time not available\nProceed? (yes/no)"
+      ],
+      "calls": []
+    },
+    {
+      "id": "move-ambiguous",
+      "passed": true,
+      "intent": "update",
+      "checks": {
+        "confirmation": true,
+        "response": true
+      },
+      "mutations": [],
+      "responses": [
+        "I found multiple matching events: 1. Project meeting at Sunday, 13 September 2026 at 10:00 AM IST; 2. Team meeting at Sunday, 13 September 2026 at 3:00 PM IST. Which one do you mean?"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "meeting",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "move-clock",
+      "passed": true,
+      "intent": "update",
+      "checks": {
+        "start": true
+      },
+      "mutations": [
+        "patch"
+      ],
+      "responses": [
+        "Updated Yoga \u2014 Sunday, 13 September 2026, 8:00 AM\u20139:00 AM IST."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "Yoga",
+            "timeMin": "2026-09-12T07:41:20.615953+00:00",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime"
+          }
+        ],
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-14T00:00:00+05:30"
+          }
+        ],
+        [
+          "patch",
+          {
+            "calendarId": "primary",
+            "eventId": "yoga",
+            "body": {
+              "start": {
+                "dateTime": "2026-09-13T08:00:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              },
+              "end": {
+                "dateTime": "2026-09-13T09:00:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              }
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "rename",
+      "passed": true,
+      "intent": "update",
+      "checks": {
+        "response": true
+      },
+      "mutations": [
+        "patch"
+      ],
+      "responses": [
+        "Updated Morning exercise \u2014 Sunday, 13 September 2026, 7:00 AM\u20138:00 AM IST."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "Yoga",
+            "timeMin": "2026-09-12T07:41:12.381736+00:00",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime"
+          }
+        ],
+        [
+          "patch",
+          {
+            "calendarId": "primary",
+            "eventId": "yoga",
+            "body": {
+              "summary": "Morning exercise"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "location",
+      "passed": true,
+      "intent": "update",
+      "checks": {},
+      "mutations": [
+        "patch"
+      ],
+      "responses": [
+        "Updated Yoga \u2014 Sunday, 13 September 2026, 7:00 AM\u20138:00 AM IST."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "Yoga",
+            "timeMin": "2026-09-12T07:41:15.816920+00:00",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime"
+          }
+        ],
+        [
+          "patch",
+          {
+            "calendarId": "primary",
+            "eventId": "yoga",
+            "body": {
+              "location": "Room 204"
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bulk-shift",
+      "passed": true,
+      "intent": "bulk_update",
+      "checks": {
+        "confirmation": true,
+        "changes": true
+      },
+      "mutations": [],
+      "responses": [
+        "Proposed changes:\n1. Move DSA study from Sunday, 13 September 2026, 1:00 PM\u20132:00 PM IST to Sunday, 13 September 2026, 2:00 PM\u20133:00 PM IST\n2. Move ML study from Sunday, 13 September 2026, 4:00 PM\u20135:00 PM IST to Sunday, 13 September 2026, 5:00 PM\u20136:00 PM IST\nProceed? (yes/no)"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "study",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T23:59:59+05:30"
+          }
+        ],
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T14:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T15:00:00+05:30"
+          }
+        ],
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T17:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T18:00:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bulk-back",
+      "passed": true,
+      "intent": "bulk_update",
+      "checks": {
+        "confirmation": true,
+        "changes": true,
+        "response": true
+      },
+      "mutations": [],
+      "responses": [
+        "The bulk move would conflict with: Team meeting. Please choose a different shift or target date."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "study",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T23:59:59+05:30"
+          }
+        ],
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T12:30:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T13:30:00+05:30"
+          }
+        ],
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T15:30:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T16:30:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bulk-delete",
+      "passed": true,
+      "intent": "bulk_delete",
+      "checks": {
+        "confirmation": true,
+        "changes": true
+      },
+      "mutations": [],
+      "responses": [
+        "Proposed changes:\n1. Delete Yoga \u2014 Sunday, 13 September 2026, 7:00 AM\u20138:00 AM IST\n2. Delete Project meeting \u2014 Sunday, 13 September 2026, 10:00 AM\u201311:00 AM IST\n3. Delete DSA study \u2014 Sunday, 13 September 2026, 1:00 PM\u20132:00 PM IST\n4. Delete Team meeting \u2014 Sunday, 13 September 2026, 3:00 PM\u20134:00 PM IST\n5. Delete ML study \u2014 Sunday, 13 September 2026, 4:00 PM\u20135:00 PM IST\nProceed? (yes/no)"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-14T00:00:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "free-evening",
+      "passed": true,
+      "intent": "free_slot",
+      "checks": {
+        "response": true
+      },
+      "mutations": [],
+      "responses": [
+        "Available 1-hour slots:\n1. Sunday, 13 September 2026, 6:00 PM\u20137:00 PM IST\n2. Sunday, 13 September 2026, 7:00 PM\u20138:00 PM IST\n3. Sunday, 13 September 2026, 8:00 PM\u20139:00 PM IST"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T18:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T21:00:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "free-duration",
+      "passed": true,
+      "intent": "free_slot",
+      "checks": {
+        "response": true
+      },
+      "mutations": [],
+      "responses": [
+        "Available 2-hour slots:\n1. Sunday, 13 September 2026, 6:00 PM\u20138:00 PM IST"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T18:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T21:00:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "free-before",
+      "passed": true,
+      "intent": "free_slot",
+      "checks": {},
+      "mutations": [],
+      "responses": [
+        "Available 1-hour slots:\n1. Sunday, 13 September 2026, 8:00 AM\u20139:00 AM IST\n2. Sunday, 13 September 2026, 9:00 AM\u201310:00 AM IST"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T10:00:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "free-between",
+      "passed": true,
+      "intent": "free_slot",
+      "checks": {},
+      "mutations": [],
+      "responses": [
+        "Available 1-hour slots:\n1. Sunday, 13 September 2026, 11:00 AM\u201312:00 PM IST\n2. Sunday, 13 September 2026, 12:00 PM\u20131:00 PM IST"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T10:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T13:00:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "free-missing",
+      "passed": true,
+      "intent": "free_slot",
+      "checks": {
+        "response": true
+      },
+      "mutations": [],
+      "responses": [
+        "Which day or time range should I search for a free slot?"
+      ],
+      "calls": []
+    },
+    {
+      "id": "free-schedule",
+      "passed": true,
+      "intent": "create",
+      "checks": {
+        "confirmation": true,
+        "changes": true
+      },
+      "mutations": [],
+      "responses": [
+        "Proposed changes:\n1. Create Interview preparation \u2014 Sunday, 13 September 2026, 6:00 PM\u20137:00 PM IST\nProceed? (yes/no)"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T18:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T21:00:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "conflict",
+      "passed": true,
+      "intent": "create",
+      "checks": {
+        "response": true
+      },
+      "mutations": [],
+      "responses": [
+        "That time conflicts with Project meeting. Available alternatives: Sunday, 13 September 2026, 11:00 AM\u201312:00 PM IST, Sunday, 13 September 2026, 12:00 PM\u20131:00 PM IST, Sunday, 13 September 2026, 2:00 PM\u20133:00 PM IST. Which time should I use?"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-14T00:00:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "delete-second",
+      "passed": true,
+      "intent": "delete",
+      "checks": {
+        "confirmation": true,
+        "response": true,
+        "event_id": true
+      },
+      "mutations": [],
+      "responses": [
+        "I found multiple matching events: 1. Project meeting at Sunday, 13 September 2026 at 10:00 AM IST; 2. Team meeting at Sunday, 13 September 2026 at 3:00 PM IST. Which one do you mean?",
+        "Proposed changes:\n1. Delete Team meeting \u2014 Sunday, 13 September 2026, 3:00 PM\u20134:00 PM IST\nProceed? (yes/no)"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "meeting",
+            "timeMin": "2026-09-12T07:41:36.396010+00:00",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "delete-confirm",
+      "passed": true,
+      "intent": "delete",
+      "checks": {},
+      "mutations": [
+        "delete"
+      ],
+      "responses": [
+        "Proposed changes:\n1. Delete Yoga \u2014 Sunday, 13 September 2026, 7:00 AM\u20138:00 AM IST\nProceed? (yes/no)",
+        "Deleted Yoga."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "Yoga",
+            "timeMin": "2026-09-12T07:41:37.191117+00:00",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime"
+          }
+        ],
+        [
+          "delete",
+          {
+            "calendarId": "primary",
+            "eventId": "yoga"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "delete-cancel",
+      "passed": true,
+      "intent": "delete",
+      "checks": {
+        "confirmation": true,
+        "response": true
+      },
+      "mutations": [],
+      "responses": [
+        "Proposed changes:\n1. Delete Yoga \u2014 Sunday, 13 September 2026, 7:00 AM\u20138:00 AM IST\nProceed? (yes/no)",
+        "Cancelled. No calendar events were changed."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "Yoga",
+            "timeMin": "2026-09-12T07:41:38.514286+00:00",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "move-followup",
+      "passed": true,
+      "intent": "update",
+      "checks": {
+        "start": true
+      },
+      "mutations": [
+        "patch"
+      ],
+      "responses": [
+        "I found Yoga at Sunday, 13 September 2026 at 7:00 AM IST. What time should I move it to?",
+        "Updated Yoga \u2014 Sunday, 13 September 2026, 8:00 PM\u20139:00 PM IST."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "Yoga",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 10,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T23:59:59+05:30"
+          }
+        ],
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-14T00:00:00+05:30"
+          }
+        ],
+        [
+          "patch",
+          {
+            "calendarId": "primary",
+            "eventId": "yoga",
+            "body": {
+              "start": {
+                "dateTime": "2026-09-13T20:00:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              },
+              "end": {
+                "dateTime": "2026-09-13T21:00:00+05:30",
+                "timeZone": "Asia/Kolkata"
+              }
+            }
+          }
+        ]
+      ]
+    },
+    {
+      "id": "free-followup",
+      "passed": true,
+      "intent": "free_slot",
+      "checks": {},
+      "mutations": [],
+      "responses": [
+        "Which day or time range should I search for a free slot?",
+        "Available 1-hour slots:\n1. Sunday, 13 September 2026, 6:00 PM\u20137:00 PM IST\n2. Sunday, 13 September 2026, 7:00 PM\u20138:00 PM IST\n3. Sunday, 13 September 2026, 8:00 PM\u20139:00 PM IST"
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T18:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T21:00:00+05:30"
+          }
+        ]
+      ]
+    },
+    {
+      "id": "bulk-conditional",
+      "passed": true,
+      "intent": "bulk_update",
+      "checks": {
+        "confirmation": true,
+        "changes": true,
+        "response": true
+      },
+      "mutations": [],
+      "responses": [
+        "Proposed changes:\n1. Move DSA study from Sunday, 13 September 2026, 1:00 PM\u20132:00 PM IST to Sunday, 13 September 2026, 2:00 PM\u20133:00 PM IST\n2. Move ML study from Sunday, 13 September 2026, 4:00 PM\u20135:00 PM IST to Sunday, 13 September 2026, 5:00 PM\u20136:00 PM IST\nProceed? (yes/no)",
+        "Please answer yes to proceed or no to cancel."
+      ],
+      "calls": [
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "q": "study",
+            "timeMin": "2026-09-13T00:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T23:59:59+05:30"
+          }
+        ],
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T14:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T15:00:00+05:30"
+          }
+        ],
+        [
+          "list",
+          {
+            "calendarId": "primary",
+            "timeMin": "2026-09-13T17:00:00+05:30",
+            "maxResults": 250,
+            "singleEvents": true,
+            "orderBy": "startTime",
+            "timeMax": "2026-09-13T18:00:00+05:30"
+          }
+        ]
+      ]
+    }
+  ]
+}

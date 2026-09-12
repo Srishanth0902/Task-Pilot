@@ -1,4 +1,7 @@
 import unittest
+from datetime import datetime
+from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from langchain_core.messages import AIMessage
 
@@ -25,6 +28,72 @@ def event(event_id, title, start, end):
 
 
 class AdvancedAgentTests(unittest.TestCase):
+    @patch("app.graph_agent.local_now")
+    def test_availability_question_infers_tomorrow_after_6_without_model_times(
+        self, mocked_now
+    ):
+        mocked_now.return_value = datetime(
+            2026, 9, 11, 12, 0, tzinfo=ZoneInfo("Asia/Kolkata")
+        )
+        service = FakeService(
+            list_result={
+                "items": [
+                    event(
+                        "busy-1",
+                        "Dinner",
+                        "2026-09-12T18:00:00+05:30",
+                        "2026-09-12T19:00:00+05:30",
+                    )
+                ]
+            }
+        )
+        conversation = CalendarConversation(
+            None,
+            service,
+            planner=Planner(QueryPlan(intent="free_slot")),
+        )
+
+        result = conversation.ask(
+            "I have to study for my interview, so can you give me the slots "
+            "that are available tomorrow after 6 pm?",
+            thread_id="availability-exact",
+        )
+
+        list_call = [call for call in service.events().calls if call[0] == "list"][-1]
+        self.assertEqual(list_call[1]["timeMin"], "2026-09-12T18:00:00+05:30")
+        self.assertEqual(list_call[1]["timeMax"], "2026-09-12T21:00:00+05:30")
+        self.assertEqual(result["intent"], "free_slot")
+        self.assertTrue(result["verified"])
+        self.assertFalse(result["awaiting_confirmation"])
+        self.assertIn("Saturday, 12 September 2026, 7:00 PM–8:00 PM IST", result["response"])
+        self.assertNotIn("insert", [name for name, _ in service.events().calls])
+
+    @patch("app.graph_agent.local_now")
+    def test_free_slot_range_followup_does_not_depend_on_model_continue_flag(
+        self, mocked_now
+    ):
+        mocked_now.return_value = datetime(
+            2026, 9, 11, 12, 0, tzinfo=ZoneInfo("Asia/Kolkata")
+        )
+        service = FakeService()
+        conversation = CalendarConversation(
+            None,
+            service,
+            planner=Planner(
+                QueryPlan(intent="free_slot"),
+                QueryPlan(intent="free_slot", continue_previous=False),
+            ),
+        )
+
+        first = conversation.ask("Can you find free slots?", thread_id="range-followup")
+        second = conversation.ask(
+            "Tomorrow and after 6 PM", thread_id="range-followup"
+        )
+
+        self.assertIn("Which day", first["response"])
+        self.assertIn("Saturday, 12 September 2026, 6:00 PM–7:00 PM IST", second["response"])
+        self.assertFalse(second["awaiting_confirmation"])
+
     def test_explicit_user_clock_overrides_model_utc_clock(self):
         service = FakeService()
         conversation = CalendarConversation(

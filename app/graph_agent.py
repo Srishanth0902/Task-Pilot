@@ -22,7 +22,13 @@ from pydantic import BaseModel, Field
 
 from app.calendar_tools import build_calendar_tools
 from app.config import TIMEZONE, WORKDAY_END_HOUR, WORKDAY_START_HOUR
-from app.date_utils import ensure_aware, format_local_datetime, format_local_range, local_now
+from app.date_utils import (
+    ensure_aware,
+    format_local_datetime,
+    format_local_range,
+    infer_local_time_window,
+    local_now,
+)
 from app.observability import log_workflow, safe_error_detail
 from app.scheduling import (
     build_bulk_changes,
@@ -98,6 +104,11 @@ be safely inferred. Resolve relative dates to timezone-aware ISO-8601.
 Rules:
 - create needs title and start_time; end_time defaults to one hour later.
 - list means list upcoming events. search means find events without changing.
+- "Rename X to Y" is update, search_query=X, title=Y. Never use search
+  as the final intent for a rename or location/description change.
+- For vague or unsupported requests, return intent=unknown. Do not omit the
+  structured response. This workflow supports one action per turn; if several
+  independent actions are requested, return unknown rather than executing only one.
 - update/delete must never invent event_id. Supply search_query when no id is
   known so the graph searches first.
 - For "delete my meeting tomorrow", intent is delete, search_query is meeting,
@@ -115,10 +126,17 @@ Rules:
   and date bounds. For "all tasks", "all events", or "everything", omit
   search_query so every event in the requested range is listed. Bulk actions
   are only plans until the graph gets confirmation.
-- Use free_slot when asked to find availability and schedule something. Supply
-  title, duration_minutes, and the requested day's time_min/time_max. The graph
-  uses the configured {WORKDAY_START_HOUR:02d}:00-{WORKDAY_END_HOUR:02d}:00
-  local scheduling window and asks before creating.
+- Use free_slot for both availability questions and requests to find a time and
+  schedule something. Always supply the requested day's time_min/time_max. For
+  scheduling, also supply title and duration_minutes. The graph uses the
+  configured {WORKDAY_START_HOUR:02d}:00-{WORKDAY_END_HOUR:02d}:00 local window.
+- "What slots are available tomorrow after 6 PM?" means tomorrow at 18:00
+  through the configured end of the workday. It is an availability question,
+  not permission to create an event.
+- If an availability question contains no day or time range, leave time_min
+  and time_max empty and ask for the day. Never invent today's date.
+- Search queries should contain the event's identifying words, e.g. study for
+  "study sessions", rather than generic words such as sessions or tasks.
 """
 
 
@@ -144,6 +162,10 @@ def _coerce_query_plan(raw) -> QueryPlan:
                 "bulk_update", "bulk_delete", "free_slot", "unknown",
             }:
                 return QueryPlan.model_validate({"intent": name, **call.get("args", {})})
+        if getattr(message, "content", None) and not getattr(message, "tool_calls", None):
+            # A conversational clarification without a tool call is not a plan
+            # to mutate anything; route it through the normal clarification node.
+            return QueryPlan(intent="unknown")
         parsing_error = raw.get("parsing_error")
         raise ValueError(str(parsing_error or "Model returned an invalid query plan."))
     return QueryPlan.model_validate(raw)
@@ -182,7 +204,11 @@ def _normalise_action_times(action: dict, query: str) -> None:
 
     if action.get("intent") not in {"create", "update"} or not action.get("start_time"):
         return
-    clock = _clock_from_text(query)
+    # Explicit foreign-zone times have already been converted to IST above.
+    if re.search(r"\b(?:UTC|GMT|PST|PDT|EST|EDT|CET|CEST)\b|[+-]\d{2}:\d{2}", query, re.I):
+        return
+    destination = re.search(r"\bto\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)\b", query, re.I)
+    clock = _clock_from_text(destination.group(1) if destination else query)
     if not clock:
         return
     start = _plan_datetime(action["start_time"])
@@ -193,6 +219,63 @@ def _normalise_action_times(action: dict, query: str) -> None:
     )
     action["start_time"] = corrected_start.isoformat()
     action["end_time"] = (corrected_start + duration).isoformat()
+
+
+def _requests_free_slot_scheduling(query: str) -> bool:
+    """Distinguish listing availability from permission to create an event."""
+    return bool(
+        re.search(r"\b(?:schedule|book|create|add|put)\b", query, re.IGNORECASE)
+    )
+
+
+def _complete_free_slot_action(action: dict, query: str, *, continuing: bool = False) -> None:
+    """Fill model-omitted free-slot details from explicit user language."""
+    if action.get("intent") != "free_slot":
+        return
+
+    if "availability_only" not in action:
+        action["availability_only"] = not _requests_free_slot_scheduling(query)
+    elif _requests_free_slot_scheduling(query):
+        action["availability_only"] = False
+
+    if not continuing and not re.search(r"\b(?:today|tomorrow|tonight|monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|after|before|between|from|at|on)\b|\d", query, re.I):
+        action.pop("time_min", None)
+        action.pop("time_max", None)
+
+    explicit_bounds = bool(re.search(r"\b(?:after|before|between|until|from)\s+\d", query, re.I))
+    if not action.get("time_min") or not action.get("time_max") or explicit_bounds:
+        range_query = query
+        if continuing and action.get("time_min") and not infer_local_time_window(query, now=local_now()):
+            range_query = action["time_min"][:10] + " " + query
+        inferred = infer_local_time_window(
+            range_query,
+            now=local_now(),
+            start_hour=WORKDAY_START_HOUR,
+            end_hour=WORKDAY_END_HOUR,
+        )
+        if inferred:
+            action["time_min"] = inferred[0].isoformat()
+            action["time_max"] = inferred[1].isoformat()
+
+    # Availability lists use one-hour blocks unless the user requested another
+    # duration. Scheduling requests still require an explicit duration.
+    if action.get("availability_only") and not action.get("duration_minutes"):
+        action["duration_minutes"] = 60
+
+
+def _is_free_slot_range_followup(query: str) -> bool:
+    """Return whether a follow-up contains a usable day/range."""
+    try:
+        return bool(
+            infer_local_time_window(
+                query,
+                now=local_now(),
+                start_hour=WORKDAY_START_HOUR,
+                end_hour=WORKDAY_END_HOUR,
+            )
+        )
+    except ValueError:
+        return False
 
 
 def _generic_bulk_query(value: str | None) -> bool:
@@ -206,6 +289,14 @@ def _generic_bulk_query(value: str | None) -> bool:
 
 
 def _select_candidate(query: str, candidates: list[dict], event_id: str | None):
+    ordinal = re.fullmatch(
+        r"(?:the\s+|option\s+)?(\d+|first|second|third|fourth|fifth)(?:\s+one)?[.!]?",
+        query.strip().casefold(),
+    )
+    if ordinal:
+        token = ordinal.group(1)
+        index = int(token) if token.isdigit() else ["first", "second", "third", "fourth", "fifth"].index(token) + 1
+        return candidates[index - 1] if 1 <= index <= len(candidates) else None
     if event_id:
         matches = [event for event in candidates if event.get("event_id") == event_id]
         if len(matches) == 1:
@@ -251,9 +342,10 @@ def _apply_followup_time(action: dict, selected_event: dict | None, query: str):
 
 def _confirmation_value(query: str) -> bool | None:
     text = re.sub(r"[^a-z ]", "", query.casefold()).strip()
-    if text in {"yes", "y", "confirm", "confirmed", "proceed", "do it", "go ahead"}:
+    text = " ".join(text.split())
+    if text in {"yes", "y", "confirm", "confirmed", "proceed", "do it", "go ahead", "yes proceed", "yes please", "yes go ahead"}:
         return True
-    if text in {"no", "n", "cancel", "stop", "never mind", "nevermind"}:
+    if text in {"no", "n", "cancel", "stop", "never mind", "nevermind", "no cancel it", "no thanks", "cancel it"}:
         return False
     return None
 
@@ -385,7 +477,32 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             }
 
         previous = state.get("pending_action")
-        continuing = bool(previous and plan.continue_previous)
+        if plan.intent == "unknown":
+            if re.fullmatch(r"(?:please\s+)?(?:add|create|schedule)\s+(?:a|an)\s+(?:calendar\s+)?event[.!]?", query, re.I):
+                plan = QueryPlan(intent="create")
+            incomplete_move = re.fullmatch(
+                r"(?:please\s+)?(?:move|reschedule)\s+(?:my\s+)?(.+?)(?:\s+(today|tomorrow))?[.!]?",
+                query, re.I,
+            )
+            if incomplete_move and not re.search(r"\b(?:to|by|and|it|them)\b|\d", incomplete_move.group(1), re.I):
+                plan = QueryPlan(intent="update", search_query=incomplete_move.group(1))
+                if incomplete_move.group(2):
+                    reference = local_now() + timedelta(days=incomplete_move.group(2).lower() == "tomorrow")
+                    start, end = day_window(reference)
+                    plan.time_min, plan.time_max = start.isoformat(), end.isoformat()
+        rename = re.fullmatch(r"\s*rename\s+(.+?)\s+to\s+(.+?)\s*[.!]?", query, re.I)
+        if rename:
+            plan = QueryPlan(intent="update", search_query=rename.group(1), title=rename.group(2))
+        deterministic_free_slot_followup = bool(
+            previous
+            and previous.get("intent") == "free_slot"
+            and plan.intent in {"free_slot", "unknown"}
+            and _is_free_slot_range_followup(query)
+        )
+        continuing = bool(
+            previous and (plan.continue_previous or deterministic_free_slot_followup
+                          or (state.get("candidate_events") and _select_candidate(query, state["candidate_events"], None)))
+        )
         if continuing:
             action = {**previous, **_action_from_plan(plan)}
             if plan.intent == "unknown":
@@ -397,6 +514,11 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             candidates = []
             selected = None
 
+        if action.get("search_query"):
+            action["search_query"] = re.sub(
+                r"\s+(?:sessions?|tasks?|events?)$", "", action["search_query"], flags=re.I
+            )
+
         if candidates and not selected:
             selected = _select_candidate(query, candidates, action.get("event_id"))
             if selected:
@@ -404,6 +526,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         _apply_followup_time(action, selected, query)
         try:
             _normalise_action_times(action, query)
+            _complete_free_slot_action(action, query, continuing=continuing)
         except ValueError as error:
             return {"error": f"Invalid event time: {error}"}
 
@@ -598,7 +721,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
 
     def find_free_slot(state: CalendarAgentState):
         action = dict(state.get("pending_action") or {})
-        if not action.get("title"):
+        availability_only = bool(action.get("availability_only"))
+        if not availability_only and not action.get("title"):
             return {"clarification": "What should I call the event?"}
         duration_minutes = action.get("duration_minutes")
         if not duration_minutes:
@@ -608,22 +732,56 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             requested_end = _plan_datetime(action["time_max"])
         except ValueError as error:
             return {"error": f"Invalid free-slot time range: {error}"}
-        work_start, work_end = working_window(requested_start)
-        window_start = max(requested_start, work_start)
-        window_end = min(requested_end, work_end)
-        if window_end <= window_start:
+        if requested_end <= requested_start:
+            return {"clarification": "The search end must be after its start."}
+        if requested_end - requested_start > timedelta(days=31):
+            return {"clarification": "Please search an availability range of 31 days or less."}
+        slots = []
+        day = requested_start
+        valid_window = False
+        limit = 6 if availability_only else 3
+        while day < requested_end and len(slots) < limit:
+            work_start, work_end = working_window(day)
+            window_start = max(requested_start, work_start)
+            window_end = min(requested_end, work_end)
+            reference = local_now()
+            if window_start.date() == reference.date():
+                window_start = max(window_start, reference.replace(microsecond=0))
+            if window_end > window_start:
+                valid_window = True
+                slots.extend(find_free_slots(
+                    state.get("candidate_events", []), window_start, window_end,
+                    timedelta(minutes=duration_minutes), limit=limit - len(slots),
+                ))
+            day = day.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        if not valid_window:
             return {
                 "clarification": "The requested range does not overlap the configured working hours."
             }
-        slots = find_free_slots(
-            state.get("candidate_events", []),
-            window_start,
-            window_end,
-            timedelta(minutes=duration_minutes),
-            limit=3,
-        )
         if not slots:
+            if availability_only:
+                return {
+                    "tool_result": {
+                        "success": True,
+                        "count": 0,
+                        "slots": [],
+                        "duration_minutes": duration_minutes,
+                    },
+                    "alternatives": [],
+                    "verified": True,
+                }
             return {"clarification": "I could not find a suitable free slot in that window."}
+        if availability_only:
+            return {
+                "tool_result": {
+                    "success": True,
+                    "count": len(slots),
+                    "slots": slots,
+                    "duration_minutes": duration_minutes,
+                },
+                "alternatives": slots,
+                "verified": True,
+            }
         chosen = slots[0]
         create_action = {
             "intent": "create",
@@ -702,6 +860,15 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         if state.get("error"):
             return "handle_error"
         if state.get("clarification"):
+            return "generate_response"
+        return "request_confirmation"
+
+    def route_after_free_slot(state: CalendarAgentState) -> str:
+        if state.get("error"):
+            return "handle_error"
+        if state.get("clarification"):
+            return "generate_response"
+        if state.get("intent") == "free_slot":
             return "generate_response"
         return "request_confirmation"
 
@@ -917,6 +1084,22 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         elif intent == "unknown":
             text = "I could not determine the calendar action. Please rephrase the request."
             clear = False
+        elif intent == "free_slot":
+            slots = result.get("slots", [])
+            duration = result.get("duration_minutes", 60)
+            if not slots:
+                text = "I found no available slots in that time range."
+            else:
+                duration_label = (
+                    f"{duration // 60}-hour" if duration % 60 == 0
+                    else f"{duration}-minute"
+                )
+                rows = [
+                    f"{index}. {format_local_range(slot.get('start'), slot.get('end'))}"
+                    for index, slot in enumerate(slots, start=1)
+                ]
+                text = f"Available {duration_label} slots:\n" + "\n".join(rows)
+            clear = True
         elif not state.get("verified") and intent == "create":
             missing = []
             action = state.get("pending_action") or {}
@@ -1000,7 +1183,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
     workflow.add_conditional_edges("search_calendar", route_after_search)
     workflow.add_conditional_edges("resolve_event", route_after_resolve)
     workflow.add_conditional_edges("load_calendar_window", route_after_window_load)
-    workflow.add_conditional_edges("find_free_slot", route_after_planning)
+    workflow.add_conditional_edges("find_free_slot", route_after_free_slot)
     workflow.add_conditional_edges("plan_bulk_operation", route_after_planning)
     workflow.add_conditional_edges("detect_conflicts", route_after_conflict_check)
     workflow.add_edge("request_confirmation", END)
