@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from time import perf_counter
 from datetime import datetime, timedelta
 from typing import Annotated, Literal, TypedDict
 
@@ -451,6 +452,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 "intent": state.get("intent"),
             }
             log_workflow("graph_node_started", **context)
+            started = perf_counter()
             try:
                 result = handler(state)
             except Exception as error:
@@ -461,6 +463,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 **context,
                 resulting_intent=result.get("intent", state.get("intent")),
                 has_error=bool(result.get("error")),
+                duration_ms=round((perf_counter() - started) * 1000, 2),
             )
             if result.get("response"):
                 log_workflow(
@@ -505,15 +508,23 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             "alternatives": state.get("alternatives", []),
         }
         try:
-            raw = structured_planner.invoke(
-                [
-                    SystemMessage(content=calendar_planner_prompt()),
-                    HumanMessage(
-                        content=f"Context:\n{json.dumps(context, default=str)}\n\n"
-                        f"User message:\n{query}"
-                    ),
-                ]
-            )
+            # Only standalone, exact read requests bypass the model. Follow-ups
+            # and every mutation retain the full interpretation/safety workflow.
+            quick_read = re.fullmatch(r"(?:show|list)(?: me)? (?:my )?(?:tasks|events)(?: for)? (today|tomorrow)[.!]?", query, re.I)
+            if quick_read and not state.get("pending_action"):
+                reference = local_now() + timedelta(days=quick_read.group(1).lower() == "tomorrow")
+                beginning, ending = day_window(reference)
+                raw = QueryPlan(intent="list", time_min=beginning.isoformat(), time_max=ending.isoformat())
+            else:
+                raw = structured_planner.invoke(
+                    [
+                        SystemMessage(content=calendar_planner_prompt()),
+                        HumanMessage(
+                            content=f"Context:\n{json.dumps(context, default=str, separators=(',', ':'), ensure_ascii=False)}\n\n"
+                            f"User message:\n{query}"
+                        ),
+                    ]
+                )
             plan = _coerce_query_plan(raw)
         except Exception as error:
             return {
@@ -522,6 +533,23 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             }
 
         previous = state.get("pending_action")
+        incomplete = re.fullmatch(r"(?:please )?(?:move|reschedule) (?:my )?([\w ]+?) (today|tomorrow)[.!]?", query, re.I)
+        if incomplete and not previous and not re.search(r"\b(?:to|by|at|and|next|available|all|every)\b|\d", incomplete.group(1), re.I):
+            # A day alone is not a destination clock. Never accept an invented
+            # midnight from the model for an incomplete rescheduling request.
+            beginning, ending = day_window(local_now() + timedelta(days=incomplete.group(2).lower() == "tomorrow"))
+            plan = QueryPlan(intent="update", search_query=incomplete.group(1), time_min=beginning.isoformat(), time_max=ending.isoformat())
+        filtered_read = re.fullmatch(r"(?:find|show|list) (?:all )?(?:my )?(.+?) (?:sessions|tasks|events) (today|tomorrow)[.!]?", query, re.I)
+        if filtered_read:
+            beginning, ending = day_window(local_now() + timedelta(days=filtered_read.group(2).lower() == "tomorrow"))
+            plan = QueryPlan(intent="search", search_query=filtered_read.group(1), time_min=beginning.isoformat(), time_max=ending.isoformat())
+        clear_day = re.fullmatch(r"(?:delete|remove) all (?:my )?(?:events|tasks) (today|tomorrow)[.!]?", query, re.I)
+        if clear_day:
+            beginning, ending = day_window(local_now() + timedelta(days=clear_day.group(1).lower() == "tomorrow"))
+            plan = QueryPlan(intent="bulk_delete", search_query="events", time_min=beginning.isoformat(), time_max=ending.isoformat())
+        if not previous and re.fullmatch(r"(?:delete|remove) my [\w ]+", query, re.I) and not re.search(r"\b(?:today|tomorrow|week|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b", query, re.I):
+            # A date-free request must not acquire an invented 'today' filter.
+            plan.time_min = plan.time_max = None
         if plan.intent == "unknown" and re.search(r"\b(?:what|which|show|list)\b", query, re.I) and re.search(r"\b(?:tasks?|events?|schedule|next)\b", query, re.I) and not re.search(r"\b(?:delete|move|remove|create)\b", query, re.I):
             now = local_now()
             beginning, ending = day_window(now)
@@ -561,6 +589,10 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                         moves.append(EventMove(search_query=clause.group(1), start_time=reference.replace(hour=clock_value[0], minute=clock_value[1], second=0, microsecond=0).isoformat()))
                 if len(moves) >= 2:
                     plan = QueryPlan(intent="update", moves=moves)
+        if plan.moves and len(plan.moves) == 1:
+            move = plan.moves[0]
+            plan.search_query, plan.event_id, plan.start_time = move.search_query, move.event_id, move.start_time
+            plan.moves = None
         deterministic_free_slot_followup = bool(
             previous
             and previous.get("intent") == "free_slot"
@@ -606,6 +638,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 action["conflict_strategy"] = "propose_relocation"
 
         if action.get("search_query"):
+            action["search_query"] = re.sub(r"^(?:my|the)\s+", "", action["search_query"], flags=re.I)
             action["search_query"] = re.sub(
                 r"\s+(?:sessions?|tasks?|events?)$", "", action["search_query"], flags=re.I
             )

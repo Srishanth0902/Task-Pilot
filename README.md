@@ -343,6 +343,20 @@ single-user project.
 
 ## Conversation regression coverage
 
+### Reply latency
+
+Exact standalone reads such as `Show my tasks tomorrow` and `List events today`
+skip model interpretation, but still fetch fresh Calendar data. Qualified queries,
+follow-ups, and writes use the normal planner and all existing safety checks.
+Planner context uses compact JSON without dropping fields or conversation history.
+Workflow `graph_node_finished` logs include `duration_ms` for latency diagnosis.
+
+`python -m evaluation.benchmark_reads` compares the shortcut with a model-driven
+equivalent using a synthetic calendar (three samples each). One local run measured
+median 0.015 seconds versus 1.799 seconds; these are not production latency promises
+and exclude Google network time. No model was downgraded and calendar checks were
+not cached or removed.
+
 The planner receives the last 12 conversation messages, including completed actions.
 Bare clock times retain an established PM interpretation; an ambiguous time that
 would otherwise create an event earlier today asks for AM/PM clarification.
