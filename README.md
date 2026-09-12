@@ -81,6 +81,33 @@ without network calls or real calendar mutations.
 | Testing | `unittest`, FastAPI TestClient, Streamlit AppTest |
 | Deployment | Docker Compose + GitHub Actions |
 
+## Target architecture
+
+[**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md) is the same system drawn with
+its seams made explicit — layer boundaries, the LangGraph state machine, the
+safety model for calendar mutations, and a map (§19) from the shipped modules
+above onto those layers.
+
+![Task-Pilot architecture: five layers from interface down to domain. Requests enter through Streamlit and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.](docs/architecture-diagram.png)
+
+The four decisions that shape everything else:
+
+- **The calendar sits behind a port**, with an in-memory fake alongside the
+  Google adapter, so everything above it runs offline against a seeded
+  calendar. The shipped code reaches the same offline testing by faking the
+  Google client itself; §19 covers what that trades away.
+- **Nothing writes to a calendar directly.** Every change is first built as an
+  inert `MutationPlan` that can be previewed, confirmed, logged, and asserted
+  on. A single function executes one.
+- **The model classifies and phrases; it never computes.** Dates, overlaps, and
+  free-slot arithmetic are ordinary Python resolved against an injected clock.
+- **Business logic lives in services, not in tools.** Every capability stays
+  callable — and testable — with no LLM in the loop.
+
+The six-week build shipped in the flat `app/` package below rather than this
+layered tree. The document is a reference for where the seams go if the
+codebase grows past it, not a description of the current directory layout.
+
 ## Project structure
 
 ```text
@@ -96,6 +123,9 @@ Task-Pilot/
 │   ├── observability.py       # Structured redacted logging
 │   ├── scheduling.py          # Conflicts, free slots, and bulk plans
 │   └── schemas.py             # Pydantic tool inputs
+├── docs/
+│   ├── ARCHITECTURE.md        # layered target design for the calendar agent
+│   └── architecture-diagram.png
 ├── evaluation/
 │   ├── queries.json           # 45 realistic evaluation queries
 │   └── predictions.example.json

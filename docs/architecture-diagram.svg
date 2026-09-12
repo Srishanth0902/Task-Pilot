@@ -1,0 +1,154 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1900 1160" width="1900" height="1160" role="img" aria-label="Task-Pilot architecture: five layers from interface down to domain. Requests enter through Streamlit and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.">
+<defs>
+<marker id="a-mut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#5C6562"/></marker>
+<marker id="a-pine" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#1F6F5C"/></marker>
+<marker id="a-clay" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#A8412F"/></marker>
+<marker id="a-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#8C948F"/></marker>
+</defs>
+<rect width="1900" height="1160" fill="#F4F5F2"/>
+<text x="56" y="62" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="36" fill="#1A201E" font-weight="700" text-anchor="start">Task-Pilot</text>
+<text x="56" y="90" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="15" fill="#5C6562" font-weight="400" text-anchor="start">Agentic calendar assistant  ·  target architecture</text>
+<line x1="1245" y1="46" x2="1279" y2="46" stroke="#1F6F5C" stroke-width="2" marker-end="url(#a-pine)"/>
+<text x="1289" y="50" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="11.5" fill="#5C6562" font-weight="400" text-anchor="start">read / plan path</text>
+<line x1="1455" y1="46" x2="1489" y2="46" stroke="#A8412F" stroke-width="2" marker-end="url(#a-clay)"/>
+<text x="1499" y="50" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="11.5" fill="#5C6562" font-weight="400" text-anchor="start">write path — gated</text>
+<path d="M 1251 74 l 7 -7 l 7 7 l -7 7 z" fill="#1F6F5C"/>
+<text x="1275" y="78" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="11.5" fill="#5C6562" font-weight="400" text-anchor="start">node uses the LLM</text>
+<rect x="1455" y="67" width="22" height="14" rx="3" fill="#FFFFFF" stroke="#8C948F" stroke-width="1" stroke-dasharray="3 2"/>
+<text x="1487" y="78" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="11.5" fill="#5C6562" font-weight="400" text-anchor="start">external system</text>
+<rect x="176" y="130" width="1444" height="114" rx="10" fill="#EAECE8" stroke="#DBDFDA" stroke-width="1"/>
+<text x="165" y="185.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14.5" fill="#1A201E" font-weight="600" text-anchor="end">INTERFACE</text>
+<text x="165" y="202.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10" fill="#8C948F" font-weight="500" text-anchor="end" letter-spacing="1.2">L5</text>
+<rect x="176" y="264" width="1444" height="300" rx="10" fill="#E4E7E2" stroke="#DBDFDA" stroke-width="1"/>
+<text x="165" y="412.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14.5" fill="#1A201E" font-weight="600" text-anchor="end">AGENT</text>
+<text x="165" y="429.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10" fill="#8C948F" font-weight="500" text-anchor="end" letter-spacing="1.2">L4</text>
+<rect x="176" y="584" width="1444" height="114" rx="10" fill="#EAECE8" stroke="#DBDFDA" stroke-width="1"/>
+<text x="165" y="639.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14.5" fill="#1A201E" font-weight="600" text-anchor="end">SERVICES</text>
+<text x="165" y="656.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10" fill="#8C948F" font-weight="500" text-anchor="end" letter-spacing="1.2">L3</text>
+<rect x="176" y="718" width="1444" height="180" rx="10" fill="#E4E7E2" stroke="#DBDFDA" stroke-width="1"/>
+<text x="165" y="806.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14.5" fill="#1A201E" font-weight="600" text-anchor="end">PROVIDERS</text>
+<text x="165" y="823.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10" fill="#8C948F" font-weight="500" text-anchor="end" letter-spacing="1.2">L2</text>
+<rect x="176" y="918" width="1444" height="92" rx="10" fill="#EAECE8" stroke="#DBDFDA" stroke-width="1"/>
+<text x="165" y="962.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14.5" fill="#1A201E" font-weight="600" text-anchor="end">DOMAIN</text>
+<text x="165" y="979.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10" fill="#8C948F" font-weight="500" text-anchor="end" letter-spacing="1.2">L1</text>
+<line x1="72" y1="146" x2="72" y2="994" stroke="#8C948F" stroke-width="1.4" marker-end="url(#a-faint)"/>
+<text x="56" y="570" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#8C948F" letter-spacing="1.6" text-anchor="middle" transform="rotate(-90 56 570)">IMPORTS POINT DOWNWARD ONLY</text>
+<rect x="210" y="155" width="120" height="64" rx="6" fill="#FFFFFF" stroke="#8C948F" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="270.0" y="192.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">User</text>
+<rect x="380" y="155" width="280" height="64" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="520.0" y="184.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">Streamlit UI</text>
+<text x="520.0" y="203.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">chat · preview · approve</text>
+<rect x="710" y="155" width="420" height="64" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="920.0" y="184.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">FastAPI</text>
+<text x="920.0" y="203.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">POST /chat · /chat/confirm · GET /events</text>
+<rect x="1180" y="155" width="418" height="64" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="1389.0" y="184.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="13" fill="#1A201E" font-weight="600" text-anchor="middle">deps.py — composition root</text>
+<text x="1389.0" y="203.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">settings · clock · adapter · services · graph</text>
+<line x1="330" y1="187" x2="372" y2="187" stroke="#5C6562" stroke-width="1.6" marker-end="url(#a-mut)"/>
+<line x1="660" y1="187" x2="702" y2="187" stroke="#5C6562" stroke-width="1.6" marker-end="url(#a-mut)"/>
+<line x1="920" y1="219" x2="920" y2="296" stroke="#1F6F5C" stroke-width="1.8" marker-end="url(#a-pine)"/>
+<text x="932" y="244" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#1F6F5C" font-weight="400" text-anchor="start">invoke(thread_id)</text>
+<text x="198" y="290" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#8C948F" font-weight="500" text-anchor="start" letter-spacing="1.4">LANGGRAPH</text>
+<rect x="198" y="300" width="1400" height="32" rx="5" fill="#E2EDE8" stroke="#CBDED6" stroke-width="1"/>
+<text x="212" y="321" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="11.5" fill="#1F6F5C" font-weight="600" text-anchor="start">AgentState</text>
+<text x="298" y="321" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="11.5" fill="#5C6562" font-weight="400" text-anchor="start">now (injected)  ·  intent  ·  time_window  ·  candidates  ·  selected  ·  plan  ·  awaiting  ·  result  ·  trace_id</text>
+<rect x="198" y="356" width="143" height="68" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="269.5" y="385" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">understand</text>
+<text x="269.5" y="402" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">query</text>
+<path d="M 326 365 l 5.5 -5.5 l 5.5 5.5 l -5.5 5.5 z" fill="#1F6F5C"/>
+<line x1="342" y1="390.0" x2="353" y2="390.0" stroke="#5C6562" stroke-width="1.5" marker-end="url(#a-mut)"/>
+<rect x="355" y="356" width="143" height="68" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="426.5" y="385" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">resolve</text>
+<text x="426.5" y="402" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">time</text>
+<line x1="499" y1="390.0" x2="510" y2="390.0" stroke="#5C6562" stroke-width="1.5" marker-end="url(#a-mut)"/>
+<rect x="512" y="356" width="143" height="68" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="583.5" y="385" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">search</text>
+<text x="583.5" y="402" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">calendar</text>
+<line x1="656" y1="390.0" x2="667" y2="390.0" stroke="#5C6562" stroke-width="1.5" marker-end="url(#a-mut)"/>
+<rect x="669" y="356" width="143" height="68" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="740.5" y="385" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">resolve</text>
+<text x="740.5" y="402" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">event</text>
+<path d="M 797 365 l 5.5 -5.5 l 5.5 5.5 l -5.5 5.5 z" fill="#1F6F5C"/>
+<line x1="813" y1="390.0" x2="824" y2="390.0" stroke="#5C6562" stroke-width="1.5" marker-end="url(#a-mut)"/>
+<rect x="826" y="356" width="143" height="68" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="897.5" y="385" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">plan</text>
+<text x="897.5" y="402" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">mutation</text>
+<line x1="970" y1="390.0" x2="981" y2="390.0" stroke="#5C6562" stroke-width="1.5" marker-end="url(#a-mut)"/>
+<rect x="983" y="356" width="143" height="68" rx="6" fill="#F7E7E3" stroke="#A8412F" stroke-width="1.6"/>
+<text x="1054.5" y="385" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#A8412F" font-weight="600" text-anchor="middle">confirm</text>
+<text x="1054.5" y="402" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#A8412F" font-weight="600" text-anchor="middle">gate</text>
+<line x1="1127" y1="390.0" x2="1138" y2="390.0" stroke="#A8412F" stroke-width="1.5" marker-end="url(#a-clay)"/>
+<rect x="1140" y="356" width="143" height="68" rx="6" fill="#F7E7E3" stroke="#A8412F" stroke-width="1.6"/>
+<text x="1211.5" y="385" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#A8412F" font-weight="600" text-anchor="middle">execute</text>
+<text x="1211.5" y="402" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#A8412F" font-weight="600" text-anchor="middle">action</text>
+<line x1="1284" y1="390.0" x2="1295" y2="390.0" stroke="#5C6562" stroke-width="1.5" marker-end="url(#a-mut)"/>
+<rect x="1297" y="356" width="143" height="68" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="1368.5" y="385" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">verify</text>
+<text x="1368.5" y="402" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">result</text>
+<line x1="1441" y1="390.0" x2="1452" y2="390.0" stroke="#5C6562" stroke-width="1.5" marker-end="url(#a-mut)"/>
+<rect x="1454" y="356" width="143" height="68" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="1525.5" y="385" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">generate</text>
+<text x="1525.5" y="402" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#1A201E" font-weight="600" text-anchor="middle">response</text>
+<path d="M 1582 365 l 5.5 -5.5 l 5.5 5.5 l -5.5 5.5 z" fill="#1F6F5C"/>
+<text x="1133.0" y="439" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10" fill="#A8412F" font-weight="600" text-anchor="middle">approved</text>
+<rect x="198" y="452" width="560" height="92" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="478.0" y="476" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#1F6F5C" font-weight="600" text-anchor="middle" letter-spacing="1.1">READ TOOLS</text>
+<text x="478.0" y="502" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="11.5" fill="#5C6562" font-weight="400" text-anchor="middle">search_events · get_event_details</text>
+<text x="478.0" y="522" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="11.5" fill="#5C6562" font-weight="400" text-anchor="middle">check_availability · find_free_slots</text>
+<rect x="772" y="452" width="520" height="92" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="1032.0" y="476" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#1F6F5C" font-weight="600" text-anchor="middle" letter-spacing="1.1">PLAN TOOLS  →  MutationPlan</text>
+<text x="1032.0" y="502" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="11.5" fill="#5C6562" font-weight="400" text-anchor="middle">plan_create · plan_update</text>
+<text x="1032.0" y="522" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="11.5" fill="#5C6562" font-weight="400" text-anchor="middle">plan_delete · plan_bulk_shift</text>
+<rect x="1306" y="452" width="292" height="92" rx="6" fill="#F7E7E3" stroke="#A8412F" stroke-width="1.6"/>
+<text x="1452.0" y="476" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#A8412F" font-weight="600" text-anchor="middle" letter-spacing="1.1">WRITE TOOL</text>
+<text x="1452.0" y="502" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="14" fill="#A8412F" font-weight="600" text-anchor="middle">apply_plan</text>
+<text x="1452.0" y="522" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="11.5" fill="#5C6562" font-weight="400" text-anchor="middle">the only mutator</text>
+<line x1="478" y1="544" x2="478" y2="602" stroke="#1F6F5C" stroke-width="1.8" marker-end="url(#a-pine)"/>
+<line x1="1032" y1="544" x2="1032" y2="602" stroke="#1F6F5C" stroke-width="1.8" marker-end="url(#a-pine)"/>
+<line x1="1452" y1="544" x2="1452" y2="602" stroke="#A8412F" stroke-width="1.8" marker-end="url(#a-clay)"/>
+<text x="755" y="578" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#8C948F" font-weight="400" text-anchor="middle">tools are thin adapters — the logic lives in services</text>
+<rect x="198" y="606" width="560" height="70" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="478.0" y="638.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">AvailabilityService</text>
+<text x="478.0" y="657.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">conflicts_for · free_slots · suggest_alternatives</text>
+<rect x="772" y="606" width="520" height="70" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="1032.0" y="638.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">BulkService</text>
+<text x="1032.0" y="657.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">plan_shift · plan_move_to_day · plan_delete_matching</text>
+<rect x="1306" y="606" width="292" height="70" rx="6" fill="#FFFFFF" stroke="#A8412F" stroke-width="1.6"/>
+<text x="1452.0" y="638.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#A8412F" font-weight="600" text-anchor="middle">EventService</text>
+<text x="1452.0" y="657.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">search · plan_* · apply()</text>
+<text x="1452" y="692" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10" fill="#A8412F" font-weight="600" text-anchor="middle">apply() — the only writer</text>
+<line x1="478" y1="676" x2="478" y2="734" stroke="#1F6F5C" stroke-width="1.8" marker-end="url(#a-pine)"/>
+<line x1="1032" y1="676" x2="1032" y2="734" stroke="#1F6F5C" stroke-width="1.8" marker-end="url(#a-pine)"/>
+<line x1="1452" y1="698" x2="1452" y2="734" stroke="#A8412F" stroke-width="1.8" marker-end="url(#a-clay)"/>
+<rect x="198" y="738" width="1400" height="52" rx="6" fill="#E2EDE8" stroke="#1F6F5C" stroke-width="1.8"/>
+<text x="220" y="770" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="15" fill="#1F6F5C" font-weight="700" text-anchor="start">CalendarPort</text>
+<text x="368" y="769" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12" fill="#5C6562" font-weight="400" text-anchor="start">list_events  ·  get_event  ·  insert_event  ·  patch_event(etag)  ·  delete_event(etag)  ·  calendar_name</text>
+<rect x="380" y="812" width="440" height="66" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="600.0" y="842.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">FakeCalendarAdapter</text>
+<text x="600.0" y="861.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">in-memory · tests, evals, offline demo</text>
+<rect x="980" y="812" width="440" height="66" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="1200.0" y="842.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">GoogleCalendarAdapter</text>
+<text x="1200.0" y="861.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">maps resource → CalendarEvent · If-Match</text>
+<line x1="600" y1="790" x2="600" y2="808" stroke="#1F6F5C" stroke-width="1.6" marker-end="url(#a-pine)"/>
+<line x1="1200" y1="790" x2="1200" y2="808" stroke="#1F6F5C" stroke-width="1.6" marker-end="url(#a-pine)"/>
+<text x="900" y="852" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#8C948F" font-weight="400" text-anchor="middle">one contract,</text>
+<text x="900" y="867" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#8C948F" font-weight="400" text-anchor="middle">two implementations</text>
+<rect x="198" y="938" width="1400" height="52" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
+<text x="220" y="960" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="700" text-anchor="start">Domain</text>
+<text x="220" y="978" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#8C948F" font-weight="400" text-anchor="start">pure Python — no I/O, no LLM, no framework</text>
+<text x="558" y="970" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="12.5" fill="#5C6562" font-weight="400" text-anchor="start">CalendarEvent  ·  TimeWindow  ·  EventPatch  ·  Operation  ·  MutationPlan  ·  Conflict  ·  Clock  ·  AgentError</text>
+<rect x="1650" y="300" width="210" height="88" rx="6" fill="#FFFFFF" stroke="#8C948F" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="1755.0" y="332" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">Checkpointer</text>
+<text x="1755.0" y="353" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">thread_id = session</text>
+<text x="1755.0" y="370" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">pauses survive restarts</text>
+<line x1="1602" y1="316" x2="1644" y2="316" stroke="#5C6562" stroke-width="1.6" marker-end="url(#a-mut)" marker-start="url(#a-mut)"/>
+<rect x="1650" y="800" width="210" height="88" rx="6" fill="#FFFFFF" stroke="#8C948F" stroke-width="1" stroke-dasharray="4 3"/>
+<text x="1755.0" y="833" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="13.5" fill="#1A201E" font-weight="600" text-anchor="middle">Google Calendar API</text>
+<text x="1755.0" y="856" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">the only network hop</text>
+<line x1="1424" y1="845.0" x2="1644" y2="845.0" stroke="#5C6562" stroke-width="1.8" marker-end="url(#a-mut)"/>
+<rect x="176" y="1040" width="1444" height="76" rx="8" fill="#F7E7E3" stroke="#E4C7BF" stroke-width="1"/>
+<rect x="176" y="1040" width="5" height="76" fill="#A8412F"/>
+<text x="202" y="1067" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#A8412F" font-weight="700" text-anchor="start" letter-spacing="1.6">THE INVARIANT</text>
+<text x="202" y="1092" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="13.5" fill="#1A201E" font-weight="400" text-anchor="start">Every calendar write passes the confirmation gate and exactly one function — EventService.apply(). Reads and plans never mutate, so a hallucinated tool call cannot destroy data.</text>
+<text x="1844" y="1092" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="11" fill="#8C948F" font-weight="400" text-anchor="end">docs/ARCHITECTURE.md</text>
+</svg>
