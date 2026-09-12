@@ -1,7 +1,8 @@
 # Deployment notes
 
 Task Pilot is packaged as two containers: `api` for FastAPI/LangGraph and
-`web` for Streamlit. The supplied Compose file is the reference deployment.
+`web` for the React frontend served by Nginx. The supplied Compose file is the reference deployment.
+Nginx forwards `/api/` to FastAPI on the internal network; browser code receives no API keys.
 
 1. Create `.env` from `.env.example` and provide `OPENROUTER_API_KEY`.
 2. Complete Google OAuth locally so `credentials.json` and `token.json` exist.

@@ -3,7 +3,7 @@
 Task Pilot is a stateful AI calendar assistant that turns natural-language
 requests into safe Google Calendar operations. It uses OpenRouter/Qwen for
 structured intent extraction, LangGraph for multi-step routing and memory,
-FastAPI for the backend, and Streamlit for the user interface.
+FastAPI for the backend, and React with TypeScript for the user interface.
 
 **Project status:** Weeks 1–6 complete. Google OAuth, live Calendar CRUD,
 OpenRouter, advanced scheduling, the backend, and the UI have been verified.
@@ -31,7 +31,7 @@ The application is designed around two safety rules:
 - Bulk rescheduling and deletion with confirmation.
 - Conflict detection with alternative time suggestions.
 - Free-slot discovery inside configurable working hours.
-- Structured FastAPI responses and a conversational Streamlit UI.
+- Structured FastAPI responses and a responsive React agenda and assistant UI.
 - Rotating JSON workflow logs with secret redaction.
 - A 45-query evaluation dataset and five-metric scoring utility.
 - Offline unit tests, GitHub Actions CI, and Docker Compose deployment.
@@ -40,7 +40,7 @@ The application is designed around two safety rules:
 
 ```mermaid
 flowchart TD
-    UI[Streamlit UI] --> API[FastAPI]
+    UI[React UI] --> API[FastAPI]
     API --> GRAPH[LangGraph agent]
     GRAPH --> LLM[OpenRouter / Qwen]
     GRAPH --> TOOLS[Validated LangChain tools]
@@ -77,8 +77,8 @@ without network calls or real calendar mutations.
 | Tool layer | LangChain `StructuredTool` |
 | Validation | Pydantic 2 |
 | Backend | FastAPI + Uvicorn |
-| Frontend | Streamlit |
-| Testing | `unittest`, FastAPI TestClient, Streamlit AppTest |
+| Frontend | React, TypeScript, Vite, TanStack Query, custom CSS |
+| Testing | `unittest`, FastAPI TestClient, Vitest, Playwright |
 | Deployment | Docker Compose + GitHub Actions |
 
 ## Project structure
@@ -169,12 +169,33 @@ python -m uvicorn app.api:app --host 127.0.0.1 --port 8000
 Terminal 2:
 
 ```powershell
-python -m streamlit run streamlit_app.py
+cd frontend
+npm ci
+npm run dev
 ```
 
-Open `http://localhost:8501`. API documentation is available at
+Open `http://localhost:5173`. API documentation is available at
 `http://127.0.0.1:8000/docs`, and configuration health is available at
 `http://127.0.0.1:8000/health`.
+
+The React workspace follows the supplied Stitch reference: a cream and forest
+agenda, persistent assistant panel, mobile navigation, event details, slot review,
+and confirmation controls. The Week view lists the next seven days. Browser API
+requests go through Vite's `/api` proxy in development and Nginx in Docker, so no
+Google or OpenRouter credentials enter the browser bundle. Node.js 24 is used by
+the build. Streamlit remains available as a legacy interface via
+`python -m streamlit run streamlit_app.py`.
+
+Frontend checks (from `frontend/`):
+
+```powershell
+npm run build
+npm test
+npx playwright install chromium
+npx playwright test
+```
+
+The browser tests use synthetic API responses and do not change Google Calendar.
 
 ## Example queries
 
@@ -269,7 +290,8 @@ possible wording. Live model responses can vary between runs.
 
 ## Screenshots
 
-The running interface is available at `http://localhost:8501`. It labels all
+The development interface is available at `http://localhost:5173` (Docker uses
+port `8501`). It labels all
 times as IST and renders event ranges in plain English instead of exposing
 ISO-8601 timestamps. A calendar-populated screenshot is intentionally not
 committed because it could publish private event names or schedules. Add only a
@@ -293,7 +315,7 @@ For the reference single-user deployment:
 docker compose up --build
 ```
 
-The Compose stack runs FastAPI and Streamlit separately, waits for backend
+The Compose stack runs FastAPI and the React/Nginx frontend separately, waits for backend
 health, mounts OAuth files at runtime, and keeps logs in a persistent volume.
 See `deployment/README.md` for secret-storage and OAuth limitations.
 

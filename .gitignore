@@ -26,6 +26,11 @@ venv/
 .venv/
 env/
 ENV/
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/
 
 # ---- Tooling / editors / OS ----
 .pytest_cache/
