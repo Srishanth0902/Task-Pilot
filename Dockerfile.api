@@ -10,7 +10,7 @@ RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 RUN useradd --create-home taskpilot \
-    && mkdir -p /app/logs \
+    && mkdir -p /app/logs /app/data \
     && chown -R taskpilot:taskpilot /app
 
 USER taskpilot

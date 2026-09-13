@@ -24,6 +24,8 @@ uvicorn==0.52.4
 streamlit==1.63.0
 httpx==0.28.1
 requests==2.34.2
+cryptography==50.0.1
+filelock==3.32.0
 
 # IANA timezone database for Windows and other systems without OS tzdata.
 tzdata==2026.2

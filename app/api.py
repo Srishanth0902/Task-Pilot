@@ -232,7 +232,9 @@ def create_app(runtime=None) -> FastAPI:
     return application
 
 
-app = create_app()
+from app.multiuser import create_multiuser_app
+
+app = create_multiuser_app()
 
 
 if __name__ == "__main__":

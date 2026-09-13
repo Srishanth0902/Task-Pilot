@@ -5,8 +5,12 @@ requests into safe Google Calendar operations. It uses OpenRouter/Qwen for
 structured intent extraction, LangGraph for multi-step routing and memory,
 FastAPI for the backend, and React with TypeScript for the user interface.
 
-**Project status:** Weeks 1–6 complete. Google OAuth, live Calendar CRUD,
-OpenRouter, advanced scheduling, the backend, and the UI have been verified.
+**Web sign-in:** The API now requires a separate Google login for each user.
+Tokens and conversations are encrypted and persisted locally; users can reopen
+saved conversations after a restart. Follow [multi-user setup](docs/MULTIUSER.md)
+to configure the new Web application OAuth client. Existing Desktop credentials
+continue to work only with the CLI. Live multi-user OAuth requires that setup;
+the account separation and persistence flows have automated test coverage.
 
 ## Project overview
 
@@ -327,7 +331,7 @@ sanitized image under `docs/screenshots/` when preparing a public demo.
 
 ## Deployment
 
-For the reference single-user deployment:
+After configuring web OAuth and encryption as described in `docs/MULTIUSER.md`:
 
 ```powershell
 docker compose up --build
@@ -337,9 +341,9 @@ The Compose stack runs FastAPI and the React/Nginx frontend separately, waits fo
 health, mounts OAuth files at runtime, and keeps logs in a persistent volume.
 See `deployment/README.md` for secret-storage and OAuth limitations.
 
-Public multi-user hosting requires web OAuth redirects and encrypted per-user
-token storage; the current Desktop OAuth flow is intentionally scoped to this
-single-user project.
+The web API supports separate Google accounts with encrypted persistent storage
+on one host. Use HTTPS and an externally managed encryption key when deploying.
+Multi-host deployment still requires replacing SQLite and local file locks.
 
 ## Conversation regression coverage
 
@@ -378,8 +382,7 @@ uses model credits but never contacts Google Calendar.
 
 ## Future improvements
 
-- Replace in-memory LangGraph checkpoints with PostgreSQL or Redis.
-- Add web OAuth and encrypted multi-user token storage.
+- Move the single-host SQLite store and file locks to PostgreSQL for multiple hosts.
 - Run the evaluation dataset automatically against configured model versions.
 - Add recurring-event editing and attendee management.
 - Add rate limiting, authentication, and distributed tracing for public use.

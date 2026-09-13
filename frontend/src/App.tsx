@@ -37,6 +37,20 @@ type Message = {
 };
 export default function App() {
   const client = useQueryClient();
+  const auth = useQuery({queryKey: ['auth'], queryFn: () => request<{authenticated:boolean; login_configured:boolean; user:{id:string;name:string;email:string}|null}>('/auth/me'), retry:false});
+  if (!auth.data?.authenticated || !auth.data.user) return <main style={{maxWidth:520,margin:'12vh auto',padding:32}}>
+    <CalendarDays size={32}/><h1>Task Pilot</h1><p>Your calendar, with a little more room for what matters.</p>
+    {auth.isPending ? <p>Loading your account…</p> : auth.isError ? <p>Could not connect. <button onClick={()=>auth.refetch()}>Try again</button></p> : <>
+      <p>Sign in to manage your Google Calendar and continue your saved conversations.</p>
+      {auth.data?.login_configured ? <a href="/api/auth/login">Continue with Google</a> : <p>Google sign-in is being configured. Please check back shortly.</p>}
+    </>}
+  </main>;
+  return <AuthenticatedApp key={auth.data.user.id} user={auth.data.user} logout={async()=>{
+    await request('/auth/logout',{method:'POST'}); client.clear(); window.location.assign('/');
+  }}/>;
+}
+function AuthenticatedApp({user,logout}:{user:{id:string;name:string;email:string};logout:()=>Promise<void>}) {
+  const client = useQueryClient();
   const [day, setDay] = useState(dateKey());
   const [view, setView] = useState<"agenda" | "week">("agenda");
   const [page, setPage] = useState("schedule");
@@ -45,7 +59,20 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
-  const [thread, setThread] = useState(() => crypto.randomUUID());
+  const [thread, setThread] = useState<string>(() => crypto.randomUUID());
+  const conversations = useQuery({queryKey:['conversations',user.id],queryFn:()=>request<{id:string;updated:number}[]>('/conversations')});
+  async function openConversation(id:string) {
+    if(busy) return;
+    setBusy(true); setError('');
+    try {
+      const saved = await request<{messages:Message[];latest:ChatResponse|null;interrupted:boolean}>(`/conversations/${encodeURIComponent(id)}`);
+      const restored = [...saved.messages];
+      if(restored.length && saved.latest) restored[restored.length-1] = {...restored[restored.length-1],payload:saved.latest};
+      setThread(id); setMessages(restored); setPending(saved.latest?.requires_confirmation || false);
+      if(saved.interrupted) setError('This conversation was interrupted. Check your calendar and start a new chat before making changes.');
+    } catch(e) {setError(e instanceof Error ? e.message : 'Unable to load conversation.');}
+    finally {setBusy(false);}
+  }
   const [eventForm, setEventForm] = useState<{
     date: string;
     time: string;
@@ -62,7 +89,7 @@ export default function App() {
     queryFn: () => request<Health>("/health"),
   });
   const events = useQuery({
-    queryKey: ["events", day, view],
+    queryKey: ["events", user.id, day, view],
     queryFn: () =>
       request<{ success: boolean; events: CalendarEvent[]; count: number }>(
         `/events?max_results=250&time_min=${encodeURIComponent(day + "T00:00:00+05:30")}&time_max=${encodeURIComponent(shiftDay(day, view === "week" ? 7 : 1) + "T00:00:00+05:30")}`,
@@ -79,7 +106,7 @@ export default function App() {
     else dialog.current?.close();
   }, [eventForm, detail]);
   async function send(text: string) {
-    if (!text.trim() || sending.current) return;
+    if (!text.trim() || sending.current || busy) return;
     sending.current = true;
     setBusy(true);
     setError("");
@@ -100,6 +127,7 @@ export default function App() {
         setDraft(text);
       }
       await client.invalidateQueries({ queryKey: ["events"] });
+      await client.invalidateQueries({ queryKey: ["conversations",user.id] });
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unable to send your request.");
       setDraft(text);
@@ -189,6 +217,16 @@ export default function App() {
             </button>
           ))}
         </nav>
+        <div style={{padding:'12px'}}>
+          <small>{user.email}</small><br/>
+          <button onClick={()=>logout().catch(()=>setError('Unable to sign out. Please try again.'))}>Sign out</button>
+          <label style={{display:'block',marginTop:16}}>Saved conversations
+            <select aria-label="Saved conversations" value={conversations.data?.some(c=>c.id===thread)?thread:''} disabled={busy} onChange={e=>{if(e.target.value)void openConversation(e.target.value);}} style={{width:'100%'}}>
+              <option value="">New conversation</option>
+              {conversations.data?.map(c=><option key={c.id} value={c.id}>{new Date(c.updated*1000).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}</option>)}
+            </select>
+          </label>
+        </div>
         <div className="sidebar-note">
           <span className="eyebrow">A LITTLE MORE ROOM</span>
           <p>

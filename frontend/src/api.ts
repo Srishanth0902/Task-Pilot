@@ -43,7 +43,8 @@ export async function request<T>(
 ): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...options,
-    headers: { "Content-Type": "application/json", ...options.headers },
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", "X-Task-Pilot": "1", ...options.headers },
   });
   const body = await response.json().catch(() => null);
   if (!response.ok)

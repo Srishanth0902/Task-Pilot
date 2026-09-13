@@ -6,6 +6,9 @@ __pycache__
 .env
 credentials.json
 token.json
+credentials.web.json
+data
+*.sqlite3*
 logs
 evaluation/results
 tests

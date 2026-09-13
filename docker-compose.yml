@@ -8,14 +8,15 @@ services:
     environment:
       API_HOST: 0.0.0.0
       API_PORT: 8000
-      GOOGLE_CREDENTIALS_FILE: /run/secrets/google_credentials.json
-      GOOGLE_TOKEN_FILE: /run/secrets/google_token.json
+      GOOGLE_WEB_CREDENTIALS_FILE: /run/secrets/google_credentials.json
+      DATA_DIRECTORY: /app/data
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://127.0.0.1:8501}
       LOG_FILE: /app/logs/task_pilot.jsonl
     ports:
       - "8000:8000"
     volumes:
-      - ./credentials.json:/run/secrets/google_credentials.json:ro
-      - ./token.json:/run/secrets/google_token.json
+      - ./credentials.web.json:/run/secrets/google_credentials.json:ro
+      - task-pilot-data:/app/data
       - task-pilot-logs:/app/logs
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
@@ -36,4 +37,5 @@ services:
     restart: unless-stopped
 
 volumes:
+  task-pilot-data:
   task-pilot-logs:

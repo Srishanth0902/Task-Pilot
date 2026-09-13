@@ -1,5 +1,7 @@
 import { test, expect } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/auth/me',route=>route.fulfill({json:{authenticated:true,login_configured:true,user:{id:'test-user',name:'Test User',email:'test@example.com'}}}));
+  await page.route('**/api/conversations',route=>route.fulfill({json:[]}));
   await page.route("**/api/health", (route) =>
     route.fulfill({
       json: {
