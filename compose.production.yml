@@ -1,0 +1,47 @@
+# Standalone single-server deployment. This file does not publish anything by itself.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    env_file: ${TASK_PILOT_ENV_FILE:-.env.production}
+    environment:
+      TASK_PILOT_ENV: production
+      GOOGLE_WEB_CREDENTIALS_FILE: /run/secrets/google_credentials.json
+      DATA_DIRECTORY: /app/data
+      LOG_FILE: /app/logs/task_pilot.jsonl
+      LOG_PRIVATE_CONTENT: 'false'
+    volumes:
+      - ./credentials.web.json:/run/secrets/google_credentials.json:ro
+      - user-data:/app/data
+      - private-logs:/app/logs
+    command: ["sh", "-c", "python -m app.deployment_check && exec python -m uvicorn app.api:app --host 0.0.0.0 --port 8000 --no-access-log"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+  gateway:
+    image: caddy:2-alpine
+    env_file: ${TASK_PILOT_ENV_FILE:-.env.production}
+    ports: ['80:80', '443:443']
+    volumes:
+      - ./deployment/Caddyfile:/etc/caddy/Caddyfile:ro
+      - tls-data:/data
+      - tls-config:/config
+    depends_on: [web]
+    restart: unless-stopped
+volumes:
+  user-data:
+  private-logs:
+  tls-data:
+  tls-config:

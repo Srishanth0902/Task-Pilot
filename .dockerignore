@@ -4,6 +4,7 @@
 __pycache__
 *.py[cod]
 .env
+.env.production
 credentials.json
 token.json
 credentials.web.json

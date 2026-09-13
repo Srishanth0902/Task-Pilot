@@ -331,6 +331,10 @@ sanitized image under `docs/screenshots/` when preparing a public demo.
 
 ## Deployment
 
+For deployment preparation without publishing, see [When ready](deployment/WHEN_READY.md).
+The production Compose file is separate from local development and leaves your
+domain and secrets unset until you choose a host.
+
 After configuring web OAuth and encryption as described in `docs/MULTIUSER.md`:
 
 ```powershell
