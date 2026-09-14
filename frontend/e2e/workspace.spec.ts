@@ -149,7 +149,7 @@ test("failed requests preserve input and mobile layout stays within viewport", a
     route.fulfill({ status: 503, json: { detail: "Connection interrupted" } }),
   );
   await page.goto("/");
-  await page.getByRole("button", { name: "Assistant", exact: true }).click();
+  await page.getByRole("button", { name: "Conversations", exact: true }).click();
   await page.getByLabel("Message your assistant").fill("Move my Yoga");
   await page.getByLabel("Send message").click();
   await expect(page.getByRole("alert")).toContainText("Connection interrupted");

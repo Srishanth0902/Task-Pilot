@@ -157,6 +157,11 @@ build contexts.
 | `API_HOST` | `127.0.0.1` | FastAPI bind address |
 | `API_PORT` | `8000` | FastAPI port |
 | `TASK_PILOT_API_URL` | `http://127.0.0.1:8000` | UI backend URL |
+| `PUBLIC_APP_URL` | `http://127.0.0.1:5173` | Browser-facing origin and OAuth callback base |
+| `GOOGLE_WEB_CREDENTIALS_FILE` | `credentials.web.json` | Multi-user Web OAuth client path |
+| `DATA_DIRECTORY` | `data` | Encrypted users, sessions, and conversations |
+| `TOKEN_ENCRYPTION_KEY` | local generated key | Required external Fernet key for HTTPS deployment |
+| `SESSION_MAX_AGE_DAYS` | `30` | Renewable browser-login lifetime (1–365 days) |
 | `LOG_LEVEL` | `INFO` | Workflow log threshold |
 | `LOG_FILE` | `logs/task_pilot.jsonl` | Rotating JSON log path |
 | `LOG_MAX_BYTES` | `2000000` | Log rotation size |
@@ -345,8 +350,9 @@ The Compose stack runs FastAPI and the React/Nginx frontend separately, waits fo
 health, mounts OAuth files at runtime, and keeps logs in a persistent volume.
 See `deployment/README.md` for secret-storage and OAuth limitations.
 
-The web API supports separate Google accounts with encrypted persistent storage
-on one host. Use HTTPS and an externally managed encryption key when deploying.
+The web API supports separate Google accounts, explicit account switching,
+30-day renewable logins, and encrypted persistent storage on one host. Use HTTPS
+and an externally managed encryption key when deploying.
 Multi-host deployment still requires replacing SQLite and local file locks.
 
 ## Conversation regression coverage

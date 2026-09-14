@@ -36,9 +36,12 @@ class UserStore:
                 CREATE TABLE IF NOT EXISTS users (id TEXT PRIMARY KEY, profile TEXT NOT NULL, tokens TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, expires REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS oauth (id TEXT PRIMARY KEY, payload TEXT NOT NULL, expires REAL NOT NULL);
-                CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, state TEXT, busy INTEGER DEFAULT 0, updated REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, state TEXT, busy INTEGER DEFAULT 0, updated REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS conversation_owner ON conversations(user_id, updated);
             ''')
+            columns = {row['name'] for row in db.execute('PRAGMA table_info(conversations)')}
+            if 'title' not in columns:
+                db.execute('ALTER TABLE conversations ADD COLUMN title TEXT')
 
     @contextmanager
     def db(self):
@@ -72,17 +75,28 @@ class UserStore:
             raise KeyError('User not found')
         return self.open(row['profile']), self.open(row['tokens'])
 
-    def session(self, user_id):
+    def session(self, user_id, max_age=30 * 24 * 60 * 60):
         token = secrets.token_urlsafe(32)
         with self.db() as db:
             db.execute('DELETE FROM sessions WHERE expires<?', (time.time(),))
-            db.execute('INSERT INTO sessions VALUES (?,?,?)', (digest(token), user_id, time.time() + 604800))
+            db.execute('INSERT INTO sessions VALUES (?,?,?)', (digest(token), user_id, time.time() + max_age))
         return token
 
     def session_user(self, token):
         with self.db() as db:
             row = db.execute('SELECT user_id FROM sessions WHERE id=? AND expires>?', (digest(token), time.time())).fetchone()
         return row['user_id'] if row else None
+
+    def touch_session(self, token, max_age=30 * 24 * 60 * 60):
+        """Renew an active session without rotating or exposing its secret."""
+        now = time.time()
+        with self.db() as db:
+            db.execute('DELETE FROM sessions WHERE expires<?', (now,))
+            cursor = db.execute(
+                'UPDATE sessions SET expires=? WHERE id=?',
+                (now + max_age, digest(token)),
+            )
+        return cursor.rowcount == 1
 
     def logout(self, token):
         with self.db() as db:
@@ -118,7 +132,39 @@ class UserStore:
             else:
                 db.execute('UPDATE conversations SET state=?,busy=?,updated=? WHERE id=? AND user_id=?', (self.seal(state),int(busy),time.time(),thread_id,user_id))
 
+    def name_conversation(self, user_id, thread_id, message):
+        """Set a private, stable title from the first meaningful user message."""
+        title = ' '.join(str(message).split()).strip(' \t\r\n"\'')
+        if not title:
+            title = 'New conversation'
+        if len(title) > 58:
+            title = title[:57].rstrip(' ,.;:-') + '…'
+        with self.db() as db:
+            db.execute(
+                'UPDATE conversations SET title=? WHERE id=? AND user_id=? AND title IS NULL',
+                (self.seal(title), thread_id, user_id),
+            )
+        return title
+
     def conversations(self, user_id):
         with self.db() as db:
-            rows = db.execute('SELECT id,updated FROM conversations WHERE user_id=? ORDER BY updated DESC LIMIT 100', (user_id,)).fetchall()
-        return [dict(row) for row in rows]
+            rows = db.execute('SELECT id,title,state,updated FROM conversations WHERE user_id=? ORDER BY updated DESC LIMIT 100', (user_id,)).fetchall()
+        result = []
+        for row in rows:
+            title = self.open(row['title']) if row['title'] else None
+            # Give conversations saved by earlier versions a useful title the
+            # first time they are listed, without exposing it in plaintext.
+            if not title and row['state']:
+                state = self.open(row['state'])
+                first = next(
+                    (
+                        message.get('data', {}).get('content')
+                        for message in state.get('messages', [])
+                        if message.get('type') == 'human'
+                    ),
+                    None,
+                )
+                if first:
+                    title = self.name_conversation(user_id, row['id'], first)
+            result.append({'id': row['id'], 'title': title or 'Conversation', 'updated': row['updated']})
+        return result

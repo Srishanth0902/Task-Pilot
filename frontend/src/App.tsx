@@ -15,6 +15,8 @@ import {
   X,
   Check,
   ArrowRight,
+  LogOut,
+  UserRound,
 } from "lucide-react";
 import {
   request,
@@ -35,21 +37,27 @@ type Message = {
   text: string;
   payload?: ChatResponse;
 };
+type UserAccount = {id:string;name:string;email:string;picture?:string|null};
 export default function App() {
   const client = useQueryClient();
-  const auth = useQuery({queryKey: ['auth'], queryFn: () => request<{authenticated:boolean; login_configured:boolean; user:{id:string;name:string;email:string}|null}>('/auth/me'), retry:false});
+  const auth = useQuery({queryKey: ['auth'], queryFn: () => request<{authenticated:boolean; login_configured:boolean; user:UserAccount|null}>('/auth/me'), retry:false});
   if (!auth.data?.authenticated || !auth.data.user) return <main style={{maxWidth:520,margin:'12vh auto',padding:32}}>
     <CalendarDays size={32}/><h1>Task Pilot</h1><p>Your calendar, with a little more room for what matters.</p>
     {auth.isPending ? <p>Loading your account…</p> : auth.isError ? <p>Could not connect. <button onClick={()=>auth.refetch()}>Try again</button></p> : <>
       <p>Sign in to manage your Google Calendar and continue your saved conversations.</p>
-      {auth.data?.login_configured ? <a href="/api/auth/login">Continue with Google</a> : <p>Google sign-in is being configured. Please check back shortly.</p>}
+      {auth.data?.login_configured ? <a href="/api/auth/login">Choose a Google account</a> : <p>Google sign-in is being configured. Please check back shortly.</p>}
     </>}
   </main>;
-  return <AuthenticatedApp key={auth.data.user.id} user={auth.data.user} logout={async()=>{
-    await request('/auth/logout',{method:'POST'}); client.clear(); window.location.assign('/');
-  }}/>;
+  const endSession = async (next: string) => {
+    await request('/auth/logout',{method:'POST'});
+    client.clear();
+    window.location.assign(next);
+  };
+  return <AuthenticatedApp key={auth.data.user.id} user={auth.data.user}
+    logout={()=>endSession('/')}
+    switchAccount={()=>endSession('/api/auth/login')}/>;
 }
-function AuthenticatedApp({user,logout}:{user:{id:string;name:string;email:string};logout:()=>Promise<void>}) {
+function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:()=>Promise<void>;switchAccount:()=>Promise<void>}) {
   const client = useQueryClient();
   const [day, setDay] = useState(dateKey());
   const [view, setView] = useState<"agenda" | "week">("agenda");
@@ -59,8 +67,12 @@ function AuthenticatedApp({user,logout}:{user:{id:string;name:string;email:strin
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [thread, setThread] = useState<string>(() => crypto.randomUUID());
-  const conversations = useQuery({queryKey:['conversations',user.id],queryFn:()=>request<{id:string;updated:number}[]>('/conversations')});
+  const profileMenu = useRef<HTMLDivElement>(null);
+  const profilePicture = safeLink(user.picture || undefined);
+  const profileInitial = (user.name.trim()[0] || user.email[0] || 'U').toUpperCase();
+  const conversations = useQuery({queryKey:['conversations',user.id],queryFn:()=>request<{id:string;title:string;updated:number}[]>('/conversations')});
   async function openConversation(id:string) {
     if(busy) return;
     setBusy(true); setError('');
@@ -105,6 +117,19 @@ function AuthenticatedApp({user,logout}:{user:{id:string;name:string;email:strin
     if (eventForm || detail) dialog.current?.showModal();
     else dialog.current?.close();
   }, [eventForm, detail]);
+  useEffect(() => {
+    if (!profileOpen) return;
+    const close = (event: MouseEvent) => {
+      if (!profileMenu.current?.contains(event.target as Node)) setProfileOpen(false);
+    };
+    const escape = (event: KeyboardEvent) => event.key === 'Escape' && setProfileOpen(false);
+    document.addEventListener('pointerdown', close);
+    document.addEventListener('keydown', escape);
+    return () => {
+      document.removeEventListener('pointerdown', close);
+      document.removeEventListener('keydown', escape);
+    };
+  }, [profileOpen]);
   async function send(text: string) {
     if (!text.trim() || sending.current || busy) return;
     sending.current = true;
@@ -201,11 +226,10 @@ function AuthenticatedApp({user,logout}:{user:{id:string;name:string;email:strin
             Task Pilot<small>CALENDAR ASSISTANT</small>
           </span>
         </a>
-        <nav aria-label="Main navigation">
+        <nav className="sidebar-navigation" aria-label="Main navigation">
           {[
             ["schedule", "Schedule", CalendarDays],
-            ["assistant", "Assistant", MessageSquare],
-            ["settings", "Settings", Settings2],
+            ["assistant", "Conversations", MessageSquare],
           ].map(([id, label, Icon]) => (
             <button
               key={String(id)}
@@ -217,37 +241,34 @@ function AuthenticatedApp({user,logout}:{user:{id:string;name:string;email:strin
             </button>
           ))}
         </nav>
-        <div style={{padding:'12px'}}>
-          <small>{user.email}</small><br/>
-          <button onClick={()=>logout().catch(()=>setError('Unable to sign out. Please try again.'))}>Sign out</button>
-          <label style={{display:'block',marginTop:16}}>Saved conversations
-            <select aria-label="Saved conversations" value={conversations.data?.some(c=>c.id===thread)?thread:''} disabled={busy} onChange={e=>{if(e.target.value)void openConversation(e.target.value);}} style={{width:'100%'}}>
-              <option value="">New conversation</option>
-              {conversations.data?.map(c=><option key={c.id} value={c.id}>{new Date(c.updated*1000).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'})}</option>)}
-            </select>
-          </label>
-        </div>
-        <div className="sidebar-note">
-          <span className="eyebrow">A LITTLE MORE ROOM</span>
-          <p>
-            For the things
-            <br />
-            that matter.
-          </p>
-          <div className="note-line" />
-        </div>
-        <div className="connection">
-          <span
-            className={`status-dot ${events.isSuccess ? "connected" : ""}`}
-          />
-          <span>
-            {events.isSuccess
-              ? "Calendar connected"
-              : events.isError
-                ? "Calendar unavailable"
-                : "Connecting to calendar"}
-            <small>Google Calendar · IST</small>
-          </span>
+        <section className="conversation-section" aria-label="Saved conversations">
+          <button className="new-conversation" disabled={busy} onClick={()=>{newChat();setPage('assistant');}}>
+            <Plus size={14}/> New conversation
+          </button>
+          <div className="conversation-list">
+            {conversations.isPending ? <small>Loading conversations…</small> : conversations.data?.length ? conversations.data.slice(0,8).map(c=><button
+              key={c.id}
+              className={c.id===thread?'active':''}
+              disabled={busy}
+              onClick={()=>{setPage('assistant');void openConversation(c.id);}}
+              title={c.title}
+            >
+              <MessageSquare size={13}/>
+              <span><strong>{c.title}</strong><small>{new Date(c.updated*1000).toLocaleDateString('en-IN',{timeZone:'Asia/Kolkata',day:'numeric',month:'short'})}</small></span>
+            </button>) : <small>No saved conversations yet.</small>}
+          </div>
+        </section>
+        <div className="sidebar-bottom">
+          <button className={`settings-nav ${page==='settings'?'active':''}`} onClick={()=>setPage('settings')}>
+            <Settings2 size={16}/><span>Settings</span>
+          </button>
+          <div className="connection">
+            <span className={`status-dot ${events.isSuccess ? "connected" : ""}`}/>
+            <span>
+              {events.isSuccess ? "Calendar connected" : events.isError ? "Calendar unavailable" : "Connecting to calendar"}
+              <small>Google Calendar · IST</small>
+            </span>
+          </div>
         </div>
       </aside>
       <header className="topbar">
@@ -255,9 +276,23 @@ function AuthenticatedApp({user,logout}:{user:{id:string;name:string;email:strin
         <span className="slash">/</span>
         <span>Your daily ledger</span>
         <span className="timezone">IST · India Standard Time</span>
-        <span className="mini-mark">
-          <CalendarDays size={15} />
-        </span>
+        <div className="profile-menu" ref={profileMenu}>
+          <button className="profile-button" aria-label={`Google account: ${user.email}`} aria-expanded={profileOpen} onClick={()=>setProfileOpen(open=>!open)}>
+            {profilePicture ? <img src={profilePicture} alt="" referrerPolicy="no-referrer"/> : <span>{profileInitial}</span>}
+          </button>
+          {profileOpen && <div className="profile-popover" role="menu">
+            <div className="profile-identity">
+              {profilePicture ? <img src={profilePicture} alt="" referrerPolicy="no-referrer"/> : <span>{profileInitial}</span>}
+              <div><strong>{user.name}</strong><small>{user.email}</small></div>
+            </div>
+            <button role="menuitem" onClick={()=>{setProfileOpen(false);switchAccount().catch(()=>setError('Unable to switch accounts. Please try again.'));}}>
+              <UserRound size={15}/> Switch account
+            </button>
+            <button role="menuitem" onClick={()=>{setProfileOpen(false);logout().catch(()=>setError('Unable to sign out. Please try again.'));}}>
+              <LogOut size={15}/> Sign out
+            </button>
+          </div>}
+        </div>
       </header>
       <main
         className={`workspace ${page === "assistant" ? "assistant-view" : ""} ${page === "settings" ? "settings-view" : ""}`}
@@ -281,6 +316,10 @@ function AuthenticatedApp({user,logout}:{user:{id:string;name:string;email:strin
                 </strong>
               </div>
               <div className="setting-row">
+                <span>Google account</span>
+                <strong>{user.email}</strong>
+              </div>
+              <div className="setting-row">
                 <span>Assistant</span>
                 <strong>
                   {health.isSuccess ? "Available" : "Unavailable"}
@@ -288,7 +327,8 @@ function AuthenticatedApp({user,logout}:{user:{id:string;name:string;email:strin
               </div>
               <p className="muted">
                 All event times are displayed in IST. Calendar access is managed
-                by your locally configured Google account.
+                by your signed-in Google account. Active sessions stay signed in
+                for up to 30 days and renew while you use Task Pilot.
               </p>
               <button className="outline" disabled={busy} onClick={newChat}>
                 Start a new conversation

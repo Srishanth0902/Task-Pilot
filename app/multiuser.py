@@ -26,6 +26,18 @@ COOKIE = 'task_pilot_session'
 SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/calendar']
 
 
+def _session_max_age(value=None):
+    """Return the renewable login lifetime, bounded to 1-365 days."""
+    raw = value if value is not None else os.getenv('SESSION_MAX_AGE_DAYS', '30')
+    try:
+        days = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError('SESSION_MAX_AGE_DAYS must be a whole number') from None
+    if not 1 <= days <= 365:
+        raise ValueError('SESSION_MAX_AGE_DAYS must be between 1 and 365')
+    return days * 24 * 60 * 60
+
+
 class UserRuntime:
     def __init__(self, store, model_factory=create_openrouter_model, service_factory=None):
         self.store = store
@@ -55,6 +67,7 @@ class UserRuntime:
             saved, interrupted = self.store.conversation(user_id, thread_id, create=True)
             if interrupted:
                 raise HTTPException(409, 'The previous request was interrupted. Check your calendar and start a new conversation before making more changes.')
+            self.store.name_conversation(user_id, thread_id, message)
             service = self.service(user_id)
             try:
                 chat = CalendarConversation(self.model_factory(), service)
@@ -72,7 +85,7 @@ class UserRuntime:
                     service.close()
 
 
-def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=None):
+def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=None, session_days=None):
     # Imported here to reuse the established response contract without a cycle.
     from app.api import ChatRequest, ChatResponse, EventsResponse, _chat_response
     origin = (origin or os.getenv('PUBLIC_APP_URL', 'http://127.0.0.1:5173')).rstrip('/')
@@ -86,12 +99,22 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
     runtime = runtime or UserRuntime(store)
     oauth_file = Path(oauth_file or os.getenv('GOOGLE_WEB_CREDENTIALS_FILE', str(PROJECT_ROOT / 'credentials.web.json')))
     redirect_uri = origin + '/api/auth/callback'
+    session_max_age = _session_max_age(session_days)
     app = FastAPI(title='Task Pilot', version='2.0.0')
     app.state.store, app.state.runtime = store, runtime
 
     @app.middleware('http')
     async def private_headers(request, call_next):
+        session_token = request.cookies.get(COOKIE, '')
         response = await call_next(request)
+        # Active use renews both the server-side expiry and the persistent
+        # browser cookie. Logout deletes the database row first, so it cannot
+        # accidentally be renewed here.
+        if session_token and store.touch_session(session_token, session_max_age):
+            response.set_cookie(
+                COOKIE, session_token, max_age=session_max_age,
+                httponly=True, secure=secure, samesite='lax', path='/'
+            )
         response.headers['Cache-Control'] = 'no-store'
         response.headers['Referrer-Policy'] = 'no-referrer'
         return response
@@ -130,7 +153,14 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
         nonce, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
         oauth = flow(code_verifier=verifier)
         state = store.oauth_start({'nonce':nonce, 'verifier':verifier})
-        url, _ = oauth.authorization_url(state=state, nonce=nonce, access_type='offline', prompt='consent', code_challenge_method='S256')
+        url, _ = oauth.authorization_url(
+            state=state,
+            nonce=nonce,
+            access_type='offline',
+            prompt='select_account consent',
+            include_granted_scopes='true',
+            code_challenge_method='S256',
+        )
         response = RedirectResponse(url)
         response.set_cookie('task_pilot_oauth', state, max_age=600, httponly=True, secure=secure, samesite='lax', path='/')
         return response
@@ -164,12 +194,21 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
                         pass
                 if not tokens.get('refresh_token'):
                     raise ValueError('Offline access not granted')
-                store.save_user(user_id, {'id':user_id, 'email':claims['email'], 'name':claims.get('name',claims['email'])}, tokens)
+                store.save_user(
+                    user_id,
+                    {
+                        'id': user_id,
+                        'email': claims['email'],
+                        'name': claims.get('name', claims['email']),
+                        'picture': claims.get('picture'),
+                    },
+                    tokens,
+                )
         except Exception:
             raise HTTPException(400, 'Google sign-in could not be completed. Please grant Calendar access and try again.') from None
         store.logout(request.cookies.get(COOKIE, ''))
         response = RedirectResponse(origin, status_code=303)
-        response.set_cookie(COOKIE, store.session(user_id), max_age=604800, httponly=True, secure=secure, samesite='lax', path='/')
+        response.set_cookie(COOKIE, store.session(user_id, session_max_age), max_age=session_max_age, httponly=True, secure=secure, samesite='lax', path='/')
         response.delete_cookie('task_pilot_oauth', path='/')
         return response
 
@@ -178,7 +217,7 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
         store.logout(request.cookies.get(COOKIE, ''))
         from fastapi.responses import JSONResponse
         response = JSONResponse({'success':True})
-        response.delete_cookie(COOKIE, path='/')
+        response.delete_cookie(COOKIE, path='/', secure=secure, httponly=True, samesite='lax')
         return response
 
     @app.get('/conversations')

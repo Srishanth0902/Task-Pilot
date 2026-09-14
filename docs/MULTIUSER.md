@@ -14,8 +14,8 @@ the user reopen saved conversations from the sidebar.
 3. Download that client's JSON as `credentials.web.json` in the project root.
 4. Set `PUBLIC_APP_URL=http://127.0.0.1:5173` in `.env`. Use this same hostname
    in your browser; `localhost` and `127.0.0.1` have different cookies.
-5. Restart the backend, open the frontend and choose Continue with Google. Each
-   user grants their own Calendar access. Google may require consent-screen
+5. Restart the backend, open the frontend and choose a Google account. Each
+   user selects and grants access to their own Calendar. Google may require consent-screen
    verification before the app can be broadly distributed.
 
 The server uses OAuth state tied to the browser, a one-use state record with a
@@ -23,14 +23,18 @@ The server uses OAuth state tied to the browser, a one-use state record with a
 audience check. Identity comes from Google's stable subject identifier. Session
 cookies are HttpOnly and SameSite=Lax, with Secure enabled for HTTPS. Mutations
 require the same-origin frontend header; the API does not enable cross-origin
-credentialed requests. Logout revokes the current app session; it does not revoke
-the Google grant or erase saved conversations.
+credentialed requests. Google shows its account chooser on every new login, and
+the UI also offers **Switch account** while signed in. Logout revokes only the
+current app session; it does not revoke the Google grant, erase saved conversations,
+or delete the encrypted refresh token, so returning with the same account is smooth.
 
 ## Storage and deployment
 
 `DATA_DIRECTORY` contains SQLite storage and per-conversation file locks. Tokens,
 user profiles, and conversation state are encrypted with Fernet. Session secrets
-are stored only as SHA-256 hashes and expire after seven days. No tokens are sent
+are stored only as SHA-256 hashes. By default, browser sessions expire 30 days
+after the most recent request; set `SESSION_MAX_AGE_DAYS` from 1 to 365 to change
+that renewable lifetime. No tokens are sent
 to browser JavaScript. Refresh tokens are saved after refresh under a short lock
 for that account; Google API clients and transports are created per request.
 
@@ -51,6 +55,9 @@ locking to a shared database such as PostgreSQL; that deployment is not implemen
 The full graph state is saved after each completed turn, including pending actions,
 selected events, confirmations and messages. A fresh graph restores that state
 for the next request. It does not retain process memory between API requests.
+Each conversation also receives an encrypted, stable title from its first user
+message so the sidebar can show recognizable chats without exposing their text
+in plaintext storage.
 An interrupted turn remains marked busy on disk and cannot be replayed. The user
 must check Calendar and start a new conversation. This avoids duplicate mutations
 after a crash; it is not an exactly-once transaction across Google and SQLite.
