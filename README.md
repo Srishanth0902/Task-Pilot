@@ -209,8 +209,8 @@ The browser tests use synthetic API responses and do not change Google Calendar.
 ## Example queries
 
 ```text
-Add DSA tomorrow at 6 PM
-Schedule an urgent meeting tomorrow at 6 PM and move Yoga to the next available slot
+Add DSA tomorrow at 6 PM for one hour
+Schedule an urgent meeting tomorrow at 6 PM for one hour and move Yoga to the next available slot
 What is on my calendar tomorrow?
 Move my ML class to 8 PM
 Delete my gym session on Friday
@@ -221,6 +221,8 @@ Find a 2-hour free slot tomorrow and schedule DSA practice
 
 When several events match, Task Pilot asks which one. When a proposed create or
 move overlaps another event, it blocks the operation and offers alternatives.
+Create requests without an explicit duration or end time pause and ask how long
+the event should last before making any Google Calendar change.
 Availability-only questions return readable one-hour choices by default and do
 not create anything. Phrases such as "tomorrow after 6 PM" are resolved
 deterministically in IST even if the selected model omits structured range data.

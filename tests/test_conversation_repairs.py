@@ -26,20 +26,20 @@ class ConversationRepairTests(unittest.TestCase):
         chat = CalendarConversation(None, service, planner=Planner(
             QueryPlan(intent="create", title="Yoga", start_time="2026-09-12T21:50:00+05:30", end_time="2026-09-12T22:50:00+05:30"),
             QueryPlan(intent="create", title="Homework", start_time="2026-09-12T09:50:00+05:30", end_time="2026-09-12T10:50:00+05:30")))
-        chat.ask("Create Yoga at 9:50 PM")
-        result = chat.ask("Okay, now at 9:50, I need to do my homework, so make a slot for that today.")
+        chat.ask("Create Yoga at 9:50 PM for 1 hour")
+        result = chat.ask("Okay, now at 9:50, I need to do my homework, so make a slot for that today for 1 hour.")
         self.assertEqual(result["tool_result"]["start"], "2026-09-12T21:50:00+05:30")
 
     @patch("app.graph_agent.local_now", return_value=NOW)
     def test_bare_clock_does_not_undo_model_pm_resolution(self, _):
         service = FakeService()
-        result = CalendarConversation(None, service, planner=Planner(QueryPlan(intent="create", title="Homework", start_time="2026-09-12T21:50:00+05:30"))).ask("Add homework at 9:50 today")
+        result = CalendarConversation(None, service, planner=Planner(QueryPlan(intent="create", title="Homework", start_time="2026-09-12T21:50:00+05:30"))).ask("Add homework at 9:50 today for 1 hour")
         self.assertEqual(result["tool_result"]["start"], "2026-09-12T21:50:00+05:30")
 
     @patch("app.graph_agent.local_now", return_value=NOW)
     def test_ambiguous_past_time_asks_instead_of_creating(self, _):
         service = FakeService()
-        result = CalendarConversation(None, service, planner=Planner(QueryPlan(intent="create", title="Homework", start_time="2026-09-12T09:50:00+05:30"))).ask("Add homework at 9:50 today")
+        result = CalendarConversation(None, service, planner=Planner(QueryPlan(intent="create", title="Homework", start_time="2026-09-12T09:50:00+05:30"))).ask("Add homework at 9:50 today for 1 hour")
         self.assertIn("AM or PM", result["response"])
         self.assertFalse(service.events().calls)
 
@@ -93,6 +93,6 @@ class ConversationRepairTests(unittest.TestCase):
                 return super().invoke(messages)
         planner = RecordingPlanner(QueryPlan(intent="create", title="Yoga", start_time="2026-09-12T21:50:00+05:30"), QueryPlan(intent="list"))
         chat = CalendarConversation(None, FakeService(), planner=planner)
-        chat.ask("Create Yoga at 9:50 PM")
+        chat.ask("Create Yoga at 9:50 PM for 1 hour")
         chat.ask("What next?")
         self.assertIn("Created Yoga", planner.context)

@@ -17,7 +17,7 @@ class CoordinatedReschedulingTests(unittest.TestCase):
         action = plan()
         action.relocation_date = "2026-09-14"
         result = CalendarConversation(None, service, planner=Planner(action)).ask(
-            "Schedule urgent meeting at 6 PM and move Yoga to the next available slot on Monday")
+            "Schedule urgent meeting at 6 PM for 1 hour and move Yoga to the next available slot on Monday")
         self.assertTrue(result["verified"])
         writes = [(n,a) for n,a in service.events().calls if n in {"patch","insert"}]
         self.assertEqual(writes[0][1]["body"]["start"]["dateTime"], "2026-09-14T08:00:00+05:30")
@@ -30,7 +30,7 @@ class CoordinatedReschedulingTests(unittest.TestCase):
     def test_explicit_permission_moves_then_creates_without_extra_confirmation(self):
         service = self.service()
         result = CalendarConversation(None, service, planner=Planner(plan())).ask(
-            "Schedule urgent meeting at 6 PM and move Yoga to the next available slot")
+            "Schedule urgent meeting at 6 PM for 1 hour and move Yoga to the next available slot")
         self.assertTrue(result["verified"])
         writes = [(n, args) for n, args in service.events().calls if n in {"patch", "insert", "delete"}]
         self.assertEqual([n for n, _ in writes], ["patch", "insert"])
@@ -40,7 +40,7 @@ class CoordinatedReschedulingTests(unittest.TestCase):
     def test_urgency_alone_requires_review_and_cancel_changes_nothing(self):
         service = self.service()
         chat = CalendarConversation(None, service, planner=Planner(plan("propose_relocation")))
-        proposal = chat.ask("Schedule urgent meeting at 6 PM")
+        proposal = chat.ask("Schedule urgent meeting at 6 PM for 1 hour")
         self.assertTrue(proposal["awaiting_confirmation"])
         self.assertEqual(len(proposal["proposed_changes"]), 2)
         result = chat.ask("no")
@@ -50,14 +50,14 @@ class CoordinatedReschedulingTests(unittest.TestCase):
     def test_confirmed_plan_executes_after_rechecking(self):
         service = self.service()
         chat = CalendarConversation(None, service, planner=Planner(plan("propose_relocation")))
-        chat.ask("Schedule urgent meeting at 6 PM")
+        chat.ask("Schedule urgent meeting at 6 PM for 1 hour")
         self.assertTrue(chat.ask("yes")["verified"])
         self.assertEqual([n for n, _ in service.events().calls], ["list", "list", "patch", "insert"])
 
     def test_changed_calendar_blocks_confirmed_plan(self):
         service = self.service()
         chat = CalendarConversation(None, service, planner=Planner(plan("propose_relocation")))
-        chat.ask("Schedule urgent meeting at 6 PM")
+        chat.ask("Schedule urgent meeting at 6 PM for 1 hour")
         service.events()._list_result["items"].append(event("new", "New blocker", "2026-09-13T19:00:00+05:30", "2026-09-13T20:00:00+05:30"))
         result = chat.ask("yes")
         self.assertTrue(result["error"])
@@ -66,7 +66,7 @@ class CoordinatedReschedulingTests(unittest.TestCase):
     def test_failure_after_move_reports_partial_result(self):
         service = self.service(insert_error=HttpError(FakeResponse(403), b"forbidden"))
         result = CalendarConversation(None, service, planner=Planner(plan())).ask(
-            "Schedule urgent meeting at 6 PM and move Yoga to the next available slot")
+            "Schedule urgent meeting at 6 PM for 1 hour and move Yoga to the next available slot")
         self.assertFalse(result["verified"])
         self.assertIn("Completed: Moved Yoga", result["response"])
         self.assertIsNone(result["pending_action"])
@@ -75,7 +75,7 @@ class CoordinatedReschedulingTests(unittest.TestCase):
         service = self.service()
         service.events()._list_result["items"].append(event("busy", "Busy", "2026-09-13T19:00:00+05:30", "2026-09-13T21:00:00+05:30"))
         result = CalendarConversation(None, service, planner=Planner(plan())).ask(
-            "Schedule urgent meeting at 6 PM and move Yoga to the next available slot")
+            "Schedule urgent meeting at 6 PM for 1 hour and move Yoga to the next available slot")
         self.assertIn("No replacement slot", result["response"])
         self.assertFalse(any(n in {"patch", "insert", "delete"} for n, _ in service.events().calls))
 
@@ -83,12 +83,12 @@ class CoordinatedReschedulingTests(unittest.TestCase):
         service = self.service()
         service.events()._list_result["items"].append(event("other", "Other meeting", "2026-09-13T18:00:00+05:30", "2026-09-13T19:00:00+05:30"))
         result = CalendarConversation(None, service, planner=Planner(plan())).ask(
-            "Schedule urgent meeting at 6 PM and move Yoga to the next available slot")
+            "Schedule urgent meeting at 6 PM for 1 hour and move Yoga to the next available slot")
         self.assertTrue(result["awaiting_confirmation"])
         self.assertEqual(len(result["proposed_changes"]), 3)
 
     def test_negated_permission_never_automatically_moves(self):
         service = self.service()
         result = CalendarConversation(None, service, planner=Planner(plan())).ask(
-            "Schedule urgent meeting at 6 PM but do not move Yoga to the next available slot")
+            "Schedule urgent meeting at 6 PM for 1 hour but do not move Yoga to the next available slot")
         self.assertFalse(any(n in {"patch", "insert"} for n, _ in service.events().calls))

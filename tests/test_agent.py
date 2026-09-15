@@ -1,7 +1,12 @@
 import unittest
 
 from app.agent import create_calendar_agent, run_calendar_request
-from app.graph_agent import CalendarConversation, QueryPlan
+from app.graph_agent import (
+    CalendarConversation,
+    QueryPlan,
+    _clock_from_text,
+    _duration_minutes_from_text,
+)
 from tests.test_calendar_service import FakeService
 
 
@@ -67,7 +72,7 @@ class LangGraphAgentTests(unittest.TestCase):
         )
 
         result = run_calendar_request(
-            "Add ML study tomorrow at 6 PM",
+            "Add ML study tomorrow at 6 PM for 1 hour",
             model=None,
             service=service,
             planner=planner,
@@ -78,11 +83,128 @@ class LangGraphAgentTests(unittest.TestCase):
         )
         self.assertTrue(result["verified"])
         self.assertEqual(result["intent"], "create")
-        self.assertEqual(result["user_query"], "Add ML study tomorrow at 6 PM")
+        self.assertEqual(result["user_query"], "Add ML study tomorrow at 6 PM for 1 hour")
         self.assertIsNone(result["pending_action"])
         self.assertIn("tool_result", result)
         self.assertIn("selected_event", result)
         self.assertEqual(len(result["messages"]), 2)
+
+    def test_create_without_duration_asks_then_uses_followup_exactly(self):
+        service = FakeService()
+        conversation = CalendarConversation(
+            None,
+            service,
+            planner=SequentialPlanner(
+                QueryPlan(
+                    intent="create",
+                    title="yoga",
+                    start_time="2026-09-14T17:00:00+05:30",
+                    end_time="2026-09-14T18:00:00+05:30",
+                ),
+                QueryPlan(intent="unknown"),
+            ),
+        )
+
+        first = conversation.ask(
+            "Can you make a slot for yoga at 5 PM today?",
+            thread_id="create-duration",
+        )
+
+        self.assertEqual(
+            first["response"],
+            "How long should yoga last? For example, 30 minutes or 1 hour.",
+        )
+        self.assertTrue(first["pending_action"]["awaiting_duration"])
+        self.assertNotIn("end_time", first["pending_action"])
+        self.assertFalse(service.events().calls)
+
+        second = conversation.ask("45 minutes", thread_id="create-duration")
+
+        insert = [call for call in service.events().calls if call[0] == "insert"][-1]
+        self.assertEqual(insert[1]["body"]["start"]["dateTime"], "2026-09-14T17:00:00+05:30")
+        self.assertEqual(insert[1]["body"]["end"]["dateTime"], "2026-09-14T17:45:00+05:30")
+        self.assertTrue(second["verified"])
+
+    def test_fractional_duration_followup_preserves_saved_7_pm_start(self):
+        service = FakeService()
+        planner = SequentialPlanner(
+            QueryPlan(
+                intent="create",
+                title="dsa",
+                start_time="2026-09-15T19:00:00+05:30",
+                # Simulate the model's former unauthorized one-hour default.
+                end_time="2026-09-15T20:00:00+05:30",
+            ),
+            # This bad fallback must never be invoked for a duration-only reply.
+            QueryPlan(
+                intent="create",
+                start_time="2026-09-15T01:00:00+05:30",
+                continue_previous=True,
+            ),
+        )
+        conversation = CalendarConversation(None, service, planner=planner)
+
+        first = conversation.ask("dsa on 7pm today", thread_id="fractional-duration")
+        second = conversation.ask("1 and half hour", thread_id="fractional-duration")
+
+        self.assertIn("How long should dsa last?", first["response"])
+        self.assertEqual(len(planner.calls), 1)
+        insert = [call for call in service.events().calls if call[0] == "insert"][-1]
+        self.assertEqual(insert[1]["body"]["start"]["dateTime"], "2026-09-15T19:00:00+05:30")
+        self.assertEqual(insert[1]["body"]["end"]["dateTime"], "2026-09-15T20:30:00+05:30")
+        self.assertTrue(second["verified"])
+
+    def test_natural_fractional_duration_phrases_are_not_clock_times(self):
+        cases = {
+            "1 and half hour": 90,
+            "1 and a half hours": 90,
+            "one and a half hours": 90,
+            "an hour and a half": 90,
+            "1.5 hours": 90,
+            "1 hour and 30 minutes": 90,
+        }
+
+        for phrase, expected in cases.items():
+            with self.subTest(phrase=phrase):
+                self.assertEqual(_duration_minutes_from_text(phrase), expected)
+                self.assertIsNone(_clock_from_text(phrase))
+
+    def test_explicit_create_range_does_not_need_duration_followup(self):
+        service = FakeService()
+        result = CalendarConversation(
+            None,
+            service,
+            planner=SequentialPlanner(
+                QueryPlan(
+                    intent="create",
+                    title="Interview prep",
+                    start_time="2026-09-14T17:00:00+05:30",
+                    end_time="2026-09-14T18:00:00+05:30",
+                )
+            ),
+        ).ask("Add interview prep today from 5 PM until 5:30 PM")
+
+        insert = [call for call in service.events().calls if call[0] == "insert"][-1]
+        self.assertEqual(insert[1]["body"]["end"]["dateTime"], "2026-09-14T17:30:00+05:30")
+        self.assertTrue(result["verified"])
+
+    def test_relative_start_is_not_mistaken_for_duration(self):
+        service = FakeService()
+        result = CalendarConversation(
+            None,
+            service,
+            planner=SequentialPlanner(
+                QueryPlan(
+                    intent="create",
+                    title="Yoga",
+                    start_time="2026-09-14T19:00:00+05:30",
+                    end_time="2026-09-14T20:00:00+05:30",
+                )
+            ),
+        ).ask("Schedule yoga in two hours")
+
+        self.assertIn("How long should Yoga last?", result["response"])
+        self.assertFalse(service.events().calls)
 
     def test_delete_searches_and_resolves_a_single_event_before_mutating(self):
         service = FakeService(

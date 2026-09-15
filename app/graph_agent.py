@@ -119,7 +119,9 @@ Return the requested intent and only the fields the user supplied or that can
 be safely inferred. Resolve relative dates to timezone-aware ISO-8601.
 
 Rules:
-- create needs title and start_time; end_time defaults to one hour later.
+- create needs title, start_time, and an explicit duration or end time. Never
+  invent a one-hour duration. If the user omits duration, leave end_time and
+  duration_minutes empty so the graph asks before creating anything.
 - list means list upcoming events. search means find events without changing.
 - "What tasks are there for now?" and "What should I do next?" mean list from
   the current time. "Tasks for today" means list today's full calendar.
@@ -214,8 +216,10 @@ def _coerce_query_plan(raw) -> QueryPlan:
 
 def _clock_from_text(text: str) -> tuple[int, int] | None:
     match = re.search(
-        r"(?:\bat\s+|^)(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*"
-        r"(?P<period>am|pm)?\b",
+        r"(?:\bat\s+|^)(?P<hour>\d{1,2})(?!\.\d)(?::(?P<minute>\d{2}))?\s*"
+        r"(?P<period>am|pm)?\b"
+        r"(?!\s*(?:(?:and\s+)?(?:a\s+)?half\s+(?:an?\s+)?)?"
+        r"(?:hours?|hrs?|minutes?|mins?)\b)",
         text,
         re.IGNORECASE,
     )
@@ -229,6 +233,164 @@ def _clock_from_text(text: str) -> tuple[int, int] | None:
     if period:
         hour = hour % 12 + (12 if period == "pm" else 0)
     return hour, minute
+
+
+_DURATION_WORDS = {
+    "a": 1,
+    "an": 1,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+_CLOCK_TOKEN = r"\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?"
+
+
+def _duration_minutes_from_text(text: str) -> int | None:
+    """Extract only an explicit event length, not relative times like 'in 2 hours'."""
+    lowered = " ".join(text.casefold().split())
+    amount_token = r"\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve"
+    prefix = r"(?:for|lasting|lasts?|make it|duration(?:\s+of|\s+is)?)\s+(?:about\s+)?"
+
+    def amount_value(token: str) -> float:
+        return float(_DURATION_WORDS[token]) if token in _DURATION_WORDS else float(token)
+
+    def duration_match(body: str):
+        return re.search(rf"\b{prefix}{body}\b", lowered) or re.fullmatch(
+            rf"(?:about\s+)?{body}[.!]?", lowered
+        )
+
+    # Natural fractional forms frequently used as a duration-only follow-up:
+    # "1 and half hour", "one and a half hours", and "an hour and a half".
+    match = duration_match(
+        rf"(?P<whole>{amount_token})\s+(?:and\s+)?(?:a\s+)?half\s+(?:an?\s+)?hours?"
+    )
+    if not match:
+        match = duration_match(
+            rf"(?P<whole>{amount_token})\s+hours?\s+and\s+(?:a\s+)?half"
+        )
+    if match:
+        minutes = round((amount_value(match.group("whole")) + 0.5) * 60)
+        if not 1 <= minutes <= 1440:
+            raise ValueError("Event duration must be between 1 minute and 24 hours.")
+        return minutes
+
+    # Also accept compound lengths such as "1 hour and 30 minutes".
+    match = duration_match(
+        rf"(?P<hours>{amount_token})\s*hours?\s+(?:and\s+)?"
+        rf"(?P<minutes>{amount_token})\s*minutes?"
+    )
+    if match:
+        minutes = round(
+            amount_value(match.group("hours")) * 60
+            + amount_value(match.group("minutes"))
+        )
+        if not 1 <= minutes <= 1440:
+            raise ValueError("Event duration must be between 1 minute and 24 hours.")
+        return minutes
+
+    if re.search(r"\b(?:for|lasting|make it)\s+(?:about\s+)?(?:half an?|a half)\s+hours?\b", lowered):
+        return 30
+    if re.search(r"\b(?:for|lasting|make it)\s+(?:about\s+)?(?:a\s+)?quarter\s+(?:of an?\s+)?hours?\b", lowered):
+        return 15
+    match = re.search(
+        r"\b(?:for|lasting|lasts?|make it|duration(?:\s+of|\s+is)?)\s+"
+        r"(?:about\s+)?(?P<amount>\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*"
+        r"(?P<unit>hours?|hrs?|minutes?|mins?)\b",
+        lowered,
+    )
+    if not match:
+        match = re.fullmatch(
+            r"(?:about\s+)?(?P<amount>\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*"
+            r"(?P<unit>hours?|hrs?|minutes?|mins?)[.!]?",
+            lowered,
+        )
+    if not match:
+        # Hyphenated lengths are unambiguous: "a 45-minute session". A plain
+        # "in two hours" deliberately does not match because that is a start time.
+        match = re.search(
+            r"\b(?P<amount>\d+(?:\.\d+)?)\s*-(?P<unit>hours?|minutes?)\b",
+            lowered,
+        )
+    if not match:
+        return None
+    token = match.group("amount")
+    amount = amount_value(token)
+    minutes = round(amount * 60) if match.group("unit").startswith(("hour", "hr")) else round(amount)
+    if not 1 <= minutes <= 1440:
+        raise ValueError("Event duration must be between 1 minute and 24 hours.")
+    return minutes
+
+
+def _explicit_end_from_text(start: datetime, text: str) -> datetime | None:
+    """Resolve an explicit 'until/end/from-to' clock relative to the start."""
+    patterns = (
+        rf"\b(?:until|through|ending\s+at|ends?\s+at)\s+(?P<end>{_CLOCK_TOKEN})\b",
+        rf"\b(?:from|between)\s+{_CLOCK_TOKEN}\s+(?:to|until|and|-)\s+(?P<end>{_CLOCK_TOKEN})\b",
+    )
+    match = next((found for pattern in patterns if (found := re.search(pattern, text, re.I))), None)
+    if not match:
+        return None
+    fragment = match.group("end")
+    clock = _clock_from_text(fragment)
+    if not clock:
+        return None
+    has_period = bool(re.search(r"(?:a\.?m\.?|p\.?m\.?)", fragment, re.I))
+    if has_period or clock[0] > 12:
+        end = start.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+        if end <= start:
+            end += timedelta(days=1)
+    else:
+        hours = {clock[0]}
+        if 1 <= clock[0] <= 11:
+            hours.add(clock[0] + 12)
+        candidates = [
+            start.replace(hour=hour, minute=clock[1], second=0, microsecond=0) + timedelta(days=day)
+            for day in (0, 1)
+            for hour in hours
+        ]
+        end = min(candidate for candidate in candidates if candidate > start)
+    if end - start > timedelta(hours=24):
+        raise ValueError("Event duration must be no more than 24 hours.")
+    return end
+
+
+def _complete_create_duration(action: dict, query: str) -> None:
+    """Require a user-supplied create duration and calculate its exact end."""
+    if action.get("intent") != "create":
+        return
+    minutes = _duration_minutes_from_text(query)
+    start = _plan_datetime(action["start_time"]) if action.get("start_time") else None
+    explicit_end = _explicit_end_from_text(start, query) if start else None
+    if minutes is not None:
+        action["duration_minutes"] = minutes
+        action["duration_explicit"] = True
+        action.pop("awaiting_duration", None)
+        if start:
+            action["end_time"] = (start + timedelta(minutes=minutes)).isoformat()
+        return
+    if explicit_end:
+        action["duration_minutes"] = round((explicit_end - start).total_seconds() / 60)
+        action["duration_explicit"] = True
+        action["end_time"] = explicit_end.isoformat()
+        action.pop("awaiting_duration", None)
+        return
+    if action.get("duration_explicit") and action.get("duration_minutes") and start:
+        action["end_time"] = (start + timedelta(minutes=action["duration_minutes"])).isoformat()
+        action.pop("awaiting_duration", None)
+        return
+    # Discard a model-supplied default because the user did not authorize it.
+    action.pop("end_time", None)
+    action.pop("duration_minutes", None)
+    action["awaiting_duration"] = True
 
 
 def _plan_datetime(value: str) -> datetime:
@@ -263,7 +425,8 @@ def _normalise_action_times(action: dict, query: str) -> None:
         hour=resolved_hour, minute=clock[1], second=0, microsecond=0
     )
     action["start_time"] = corrected_start.isoformat()
-    action["end_time"] = (corrected_start + duration).isoformat()
+    if end or action.get("intent") != "create":
+        action["end_time"] = (corrected_start + duration).isoformat()
 
 
 def _requests_free_slot_scheduling(query: str) -> bool:
@@ -402,7 +565,12 @@ def _needs_search(action: dict) -> bool:
 def _action_ready(action: dict) -> bool:
     intent = action.get("intent")
     if intent == "create":
-        return bool(action.get("title") and action.get("start_time"))
+        return bool(
+            action.get("title")
+            and action.get("start_time")
+            and action.get("end_time")
+            and not action.get("awaiting_duration")
+        )
     if intent == "update":
         changes = any(
             action.get(field) is not None
@@ -499,8 +667,9 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 "verified": False,
                 "tool_result": None,
             }
+        previous = state.get("pending_action")
         context = {
-            "pending_action": state.get("pending_action"),
+            "pending_action": previous,
             "recent_messages": [{"role": m.type, "content": m.content} for m in state.get("messages", [])[-12:]],
             "selected_event": state.get("selected_event"),
             "candidate_events": state.get("candidate_events", []),
@@ -508,10 +677,32 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             "alternatives": state.get("alternatives", []),
         }
         try:
+            duration_followup = False
+            if (
+                previous
+                and previous.get("intent") == "create"
+                and previous.get("awaiting_duration")
+            ):
+                try:
+                    duration_followup = _duration_minutes_from_text(query) is not None
+                except ValueError:
+                    # Preserve the pending action so the validation path can
+                    # return the precise duration error below.
+                    duration_followup = True
+                if not duration_followup and previous.get("start_time"):
+                    duration_followup = bool(
+                        _explicit_end_from_text(
+                            _plan_datetime(previous["start_time"]), query
+                        )
+                    )
             # Only standalone, exact read requests bypass the model. Follow-ups
             # and every mutation retain the full interpretation/safety workflow.
+            # A duration-only answer is deterministic and bypasses the model so
+            # it cannot replace the already-confirmed title or start time.
             quick_read = re.fullmatch(r"(?:show|list)(?: me)? (?:my )?(?:tasks|events)(?: for)? (today|tomorrow)[.!]?", query, re.I)
-            if quick_read and not state.get("pending_action"):
+            if duration_followup:
+                raw = QueryPlan(intent="create", continue_previous=True)
+            elif quick_read and not previous:
                 reference = local_now() + timedelta(days=quick_read.group(1).lower() == "tomorrow")
                 beginning, ending = day_window(reference)
                 raw = QueryPlan(intent="list", time_min=beginning.isoformat(), time_max=ending.isoformat())
@@ -532,7 +723,6 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 "verified": False,
             }
 
-        previous = state.get("pending_action")
         incomplete = re.fullmatch(r"(?:please )?(?:move|reschedule) (?:my )?([\w ]+?) (today|tomorrow)[.!]?", query, re.I)
         if incomplete and not previous and not re.search(r"\b(?:to|by|at|and|next|available|all|every)\b|\d", incomplete.group(1), re.I):
             # A day alone is not a destination clock. Never accept an invented
@@ -599,8 +789,26 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             and plan.intent in {"free_slot", "unknown"}
             and _is_free_slot_range_followup(query)
         )
+        try:
+            deterministic_duration_followup = bool(
+                previous
+                and previous.get("intent") == "create"
+                and previous.get("awaiting_duration")
+                and (
+                    _duration_minutes_from_text(query) is not None
+                    or (
+                        previous.get("start_time")
+                        and _explicit_end_from_text(_plan_datetime(previous["start_time"]), query)
+                    )
+                )
+            )
+        except ValueError:
+            # Continue the pending create so validation can return a safe,
+            # user-facing duration error instead of losing conversation state.
+            deterministic_duration_followup = True
         continuing = bool(
             previous and (plan.continue_previous or deterministic_free_slot_followup
+                          or deterministic_duration_followup
                           or (state.get("candidate_events") and _select_candidate(query, state["candidate_events"], None)))
         )
         if continuing:
@@ -663,6 +871,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                         action["start_time"], action["end_time"] = prior.isoformat(), (prior + duration).isoformat()
             _normalise_action_times(action, query)
             _complete_free_slot_action(action, query, continuing=continuing)
+            _complete_create_duration(action, query)
             if action.get("intent") == "create" and action.get("start_time") and bare and not re.search(r"\d\s*(?:am|pm)\b|\b(?:morning|evening|UTC|GMT)\b", query, re.I):
                 proposed = _plan_datetime(action["start_time"])
                 now = local_now()
@@ -1343,13 +1552,18 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 text = f"Available {duration_label} slots:\n" + "\n".join(rows)
             clear = True
         elif not state.get("verified") and intent == "create":
-            missing = []
             action = state.get("pending_action") or {}
-            if not action.get("title"):
-                missing.append("a title")
-            if not action.get("start_time"):
-                missing.append("a start time")
-            text = "Please provide " + " and ".join(missing) + "."
+            if action.get("awaiting_duration") and action.get("title") and action.get("start_time"):
+                text = f"How long should {action['title']} last? For example, 30 minutes or 1 hour."
+            else:
+                missing = []
+                if not action.get("title"):
+                    missing.append("a title")
+                if not action.get("start_time"):
+                    missing.append("a start time")
+                if action.get("awaiting_duration"):
+                    missing.append("a duration")
+                text = "Please provide " + " and ".join(missing) + "."
             clear = False
         elif not state.get("verified") and intent == "update":
             text = "What would you like to change about that event?"
