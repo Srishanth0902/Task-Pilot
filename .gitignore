@@ -1,7 +1,11 @@
 # ---- Secrets: never commit these ----
 .env
+.env.production
 credentials.json
 token.json
+credentials.web.json
+data/
+*.sqlite3*
 logs/
 *.log
 
@@ -26,6 +30,11 @@ venv/
 .venv/
 env/
 ENV/
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+frontend/test-results/
+frontend/playwright-report/
 
 # ---- Tooling / editors / OS ----
 .pytest_cache/

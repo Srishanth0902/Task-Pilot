@@ -56,7 +56,7 @@
       },
       "mutations": [],
       "responses": [
-        "That time conflicts with Yoga. Available alternatives: Sunday, 13 September 2026, 8:00 AM\u20138:45 AM IST, Sunday, 13 September 2026, 8:45 AM\u20139:30 AM IST, Sunday, 13 September 2026, 11:00 AM\u201311:45 AM IST. Which time should I use?"
+        "That time conflicts with Yoga. Available alternatives: Sunday, 13 September 2026, 8:15 AM\u20139:15 AM IST, Sunday, 13 September 2026, 11:00 AM\u201312:00 PM IST, Sunday, 13 September 2026, 12:00 PM\u20131:00 PM IST. Which time should I use? You can also ask me to move the existing event to the next available slot."
       ],
       "calls": [
         [
@@ -83,7 +83,7 @@
         "insert"
       ],
       "responses": [
-        "Created midnight reading \u2014 Monday, 14 September 2026, 12:00 AM\u201312:30 AM IST."
+        "Created midnight reading \u2014 Monday, 14 September 2026, 12:00 AM\u20131:00 AM IST."
       ],
       "calls": [
         [
@@ -108,7 +108,7 @@
                 "timeZone": "Asia/Kolkata"
               },
               "end": {
-                "dateTime": "2026-09-14T00:30:00+05:30",
+                "dateTime": "2026-09-14T01:00:00+05:30",
                 "timeZone": "Asia/Kolkata"
               }
             }
@@ -272,7 +272,7 @@
             "maxResults": 10,
             "singleEvents": true,
             "orderBy": "startTime",
-            "timeMax": "2026-09-13T23:59:59+05:30"
+            "timeMax": "2026-09-14T00:00:00+05:30"
           }
         ]
       ]
@@ -295,7 +295,7 @@
           {
             "calendarId": "primary",
             "q": "meeting",
-            "timeMin": "2026-09-12T07:41:07.570266+00:00",
+            "timeMin": "2026-09-12T20:05:27.876119+00:00",
             "maxResults": 10,
             "singleEvents": true,
             "orderBy": "startTime"
@@ -361,7 +361,8 @@
             "timeMin": "2026-09-13T00:00:00+05:30",
             "maxResults": 10,
             "singleEvents": true,
-            "orderBy": "startTime"
+            "orderBy": "startTime",
+            "timeMax": "2026-09-14T00:00:00+05:30"
           }
         ]
       ]
@@ -385,7 +386,7 @@
           {
             "calendarId": "primary",
             "q": "Yoga",
-            "timeMin": "2026-09-12T07:41:20.615953+00:00",
+            "timeMin": "2026-09-12T20:05:39.698347+00:00",
             "maxResults": 10,
             "singleEvents": true,
             "orderBy": "startTime"
@@ -440,7 +441,7 @@
           {
             "calendarId": "primary",
             "q": "Yoga",
-            "timeMin": "2026-09-12T07:41:12.381736+00:00",
+            "timeMin": "2026-09-12T20:05:33.902647+00:00",
             "maxResults": 10,
             "singleEvents": true,
             "orderBy": "startTime"
@@ -475,7 +476,7 @@
           {
             "calendarId": "primary",
             "q": "Yoga",
-            "timeMin": "2026-09-12T07:41:15.816920+00:00",
+            "timeMin": "2026-09-12T20:05:36.328948+00:00",
             "maxResults": 10,
             "singleEvents": true,
             "orderBy": "startTime"
@@ -682,7 +683,7 @@
           "list",
           {
             "calendarId": "primary",
-            "timeMin": "2026-09-13T00:00:00+05:30",
+            "timeMin": "2026-09-13T08:00:00+05:30",
             "maxResults": 250,
             "singleEvents": true,
             "orderBy": "startTime",
@@ -762,7 +763,7 @@
       },
       "mutations": [],
       "responses": [
-        "That time conflicts with Project meeting. Available alternatives: Sunday, 13 September 2026, 11:00 AM\u201312:00 PM IST, Sunday, 13 September 2026, 12:00 PM\u20131:00 PM IST, Sunday, 13 September 2026, 2:00 PM\u20133:00 PM IST. Which time should I use?"
+        "That time conflicts with Project meeting. Available alternatives: Sunday, 13 September 2026, 11:00 AM\u201312:00 PM IST, Sunday, 13 September 2026, 12:00 PM\u20131:00 PM IST, Sunday, 13 September 2026, 2:00 PM\u20133:00 PM IST. Which time should I use? You can also ask me to move the existing event to the next available slot."
       ],
       "calls": [
         [
@@ -798,7 +799,7 @@
           {
             "calendarId": "primary",
             "q": "meeting",
-            "timeMin": "2026-09-12T07:41:36.396010+00:00",
+            "timeMin": "2026-09-12T20:06:53.094597+00:00",
             "maxResults": 10,
             "singleEvents": true,
             "orderBy": "startTime"
@@ -824,7 +825,7 @@
           {
             "calendarId": "primary",
             "q": "Yoga",
-            "timeMin": "2026-09-12T07:41:37.191117+00:00",
+            "timeMin": "2026-09-12T20:05:54.839605+00:00",
             "maxResults": 10,
             "singleEvents": true,
             "orderBy": "startTime"
@@ -858,7 +859,7 @@
           {
             "calendarId": "primary",
             "q": "Yoga",
-            "timeMin": "2026-09-12T07:41:38.514286+00:00",
+            "timeMin": "2026-09-12T20:05:56.928787+00:00",
             "maxResults": 10,
             "singleEvents": true,
             "orderBy": "startTime"
@@ -890,7 +891,7 @@
             "maxResults": 10,
             "singleEvents": true,
             "orderBy": "startTime",
-            "timeMax": "2026-09-13T23:59:59+05:30"
+            "timeMax": "2026-09-14T00:00:00+05:30"
           }
         ],
         [
@@ -930,7 +931,7 @@
       "checks": {},
       "mutations": [],
       "responses": [
-        "Which day or time range should I search for a free slot?",
+        "I could not complete that request: Could not understand the request: Error code: 402 - {'error': {'message': 'This request would exceed your available credits given your current in-flight requests. Retry after in-flight requests settle, or add credits.', 'code': 402, 'metadata': {'reason': 'in_flight_budget_exhausted', 'limit_source': 'openrouter_in_flight_budget', 'remedy_hint': 'Retry after your in-flight requests settle (see the Retry-After header). Adding credits at https://openrouter.ai/settings/credits raises your in-flight budget, up to a capped ceiling.',",
         "Available 1-hour slots:\n1. Sunday, 13 September 2026, 6:00 PM\u20137:00 PM IST\n2. Sunday, 13 September 2026, 7:00 PM\u20138:00 PM IST\n3. Sunday, 13 September 2026, 8:00 PM\u20139:00 PM IST"
       ],
       "calls": [

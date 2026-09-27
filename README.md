@@ -3,10 +3,14 @@
 Task Pilot is a stateful AI calendar assistant that turns natural-language
 requests into safe Google Calendar operations. It uses OpenRouter/Qwen for
 structured intent extraction, LangGraph for multi-step routing and memory,
-FastAPI for the backend, and Streamlit for the user interface.
+FastAPI for the backend, and React with TypeScript for the user interface.
 
-**Project status:** Weeks 1–6 complete. Google OAuth, live Calendar CRUD,
-OpenRouter, advanced scheduling, the backend, and the UI have been verified.
+**Web sign-in:** The API now requires a separate Google login for each user.
+Tokens and conversations are encrypted and persisted locally; users can reopen
+saved conversations after a restart. Follow [multi-user setup](docs/MULTIUSER.md)
+to configure the new Web application OAuth client. Existing Desktop credentials
+continue to work only with the CLI. Live multi-user OAuth requires that setup;
+the account separation and persistence flows have automated test coverage.
 
 ## Project overview
 
@@ -31,7 +35,7 @@ The application is designed around two safety rules:
 - Bulk rescheduling and deletion with confirmation.
 - Conflict detection with alternative time suggestions.
 - Free-slot discovery inside configurable working hours.
-- Structured FastAPI responses and a conversational Streamlit UI.
+- Structured FastAPI responses and a responsive React agenda and assistant UI.
 - Rotating JSON workflow logs with secret redaction.
 - A 45-query evaluation dataset and five-metric scoring utility.
 - Offline unit tests, GitHub Actions CI, and Docker Compose deployment.
@@ -40,7 +44,7 @@ The application is designed around two safety rules:
 
 ```mermaid
 flowchart TD
-    UI[Streamlit UI] --> API[FastAPI]
+    UI[React UI] --> API[FastAPI]
     API --> GRAPH[LangGraph agent]
     GRAPH --> LLM[OpenRouter / Qwen]
     GRAPH --> TOOLS[Validated LangChain tools]
@@ -77,8 +81,8 @@ without network calls or real calendar mutations.
 | Tool layer | LangChain `StructuredTool` |
 | Validation | Pydantic 2 |
 | Backend | FastAPI + Uvicorn |
-| Frontend | Streamlit |
-| Testing | `unittest`, FastAPI TestClient, Streamlit AppTest |
+| Frontend | React, TypeScript, Vite, TanStack Query, custom CSS |
+| Testing | `unittest`, FastAPI TestClient, Vitest, Playwright |
 | Deployment | Docker Compose + GitHub Actions |
 
 ## Target architecture
@@ -183,6 +187,11 @@ build contexts.
 | `API_HOST` | `127.0.0.1` | FastAPI bind address |
 | `API_PORT` | `8000` | FastAPI port |
 | `TASK_PILOT_API_URL` | `http://127.0.0.1:8000` | UI backend URL |
+| `PUBLIC_APP_URL` | `http://127.0.0.1:5173` | Browser-facing origin and OAuth callback base |
+| `GOOGLE_WEB_CREDENTIALS_FILE` | `credentials.web.json` | Multi-user Web OAuth client path |
+| `DATA_DIRECTORY` | `data` | Encrypted users, sessions, and conversations |
+| `TOKEN_ENCRYPTION_KEY` | local generated key | Required external Fernet key for HTTPS deployment |
+| `SESSION_MAX_AGE_DAYS` | `30` | Renewable browser-login lifetime (1–365 days) |
 | `LOG_LEVEL` | `INFO` | Workflow log threshold |
 | `LOG_FILE` | `logs/task_pilot.jsonl` | Rotating JSON log path |
 | `LOG_MAX_BYTES` | `2000000` | Log rotation size |
@@ -199,17 +208,39 @@ python -m uvicorn app.api:app --host 127.0.0.1 --port 8000
 Terminal 2:
 
 ```powershell
-python -m streamlit run streamlit_app.py
+cd frontend
+npm ci
+npm run dev
 ```
 
-Open `http://localhost:8501`. API documentation is available at
+Open `http://localhost:5173`. API documentation is available at
 `http://127.0.0.1:8000/docs`, and configuration health is available at
 `http://127.0.0.1:8000/health`.
+
+The React workspace follows the supplied Stitch reference: a cream and forest
+agenda, persistent assistant panel, mobile navigation, event details, slot review,
+and confirmation controls. The Week view lists the next seven days. Browser API
+requests go through Vite's `/api` proxy in development and Nginx in Docker, so no
+Google or OpenRouter credentials enter the browser bundle. Node.js 24 is used by
+the build. Streamlit remains available as a legacy interface via
+`python -m streamlit run streamlit_app.py`.
+
+Frontend checks (from `frontend/`):
+
+```powershell
+npm run build
+npm test
+npx playwright install chromium
+npx playwright test
+```
+
+The browser tests use synthetic API responses and do not change Google Calendar.
 
 ## Example queries
 
 ```text
-Add DSA tomorrow at 6 PM
+Add DSA tomorrow at 6 PM for one hour
+Schedule an urgent meeting tomorrow at 6 PM for one hour and move Yoga to the next available slot
 What is on my calendar tomorrow?
 Move my ML class to 8 PM
 Delete my gym session on Friday
@@ -220,9 +251,28 @@ Find a 2-hour free slot tomorrow and schedule DSA practice
 
 When several events match, Task Pilot asks which one. When a proposed create or
 move overlaps another event, it blocks the operation and offers alternatives.
+Create requests without an explicit duration or end time pause and ask how long
+the event should last before making any Google Calendar change.
 Availability-only questions return readable one-hour choices by default and do
 not create anything. Phrases such as "tomorrow after 6 PM" are resolved
 deterministically in IST even if the selected model omits structured range data.
+
+### Making room for urgent events
+
+An urgent create request can propose moving the occupying events into free slots
+later that day. The proposal preserves their durations and requires confirmation.
+Explicit instructions to move a named conflicting event to the next available slot
+authorize that move without a second confirmation; extra affected events still
+require review. Specify a replacement day to search that day instead (up to 31
+days ahead). No event is deleted to make room, and no changes are made if a full
+replacement plan cannot be found.
+
+The agent rechecks the reviewed schedule, moves the occupying events, then creates
+the new event. Google Calendar does not provide an atomic transaction across these
+operations: on failure the agent stops and reports completed moves, without
+automatically retrying or claiming to have undone them. External edits can still
+race with execution. This workflow currently handles a new event plus relocation
+of its conflicts, not arbitrary chains of moves across an entire calendar.
 
 ## Agent workflow and logging
 
@@ -299,7 +349,8 @@ possible wording. Live model responses can vary between runs.
 
 ## Screenshots
 
-The running interface is available at `http://localhost:8501`. It labels all
+The development interface is available at `http://localhost:5173` (Docker uses
+port `8501`). It labels all
 times as IST and renders event ranges in plain English instead of exposing
 ISO-8601 timestamps. A calendar-populated screenshot is intentionally not
 committed because it could publish private event names or schedules. Add only a
@@ -317,24 +368,63 @@ sanitized image under `docs/screenshots/` when preparing a public demo.
 
 ## Deployment
 
-For the reference single-user deployment:
+For deployment preparation without publishing, see [When ready](deployment/WHEN_READY.md).
+The production Compose file is separate from local development and leaves your
+domain and secrets unset until you choose a host.
+
+After configuring web OAuth and encryption as described in `docs/MULTIUSER.md`:
 
 ```powershell
 docker compose up --build
 ```
 
-The Compose stack runs FastAPI and Streamlit separately, waits for backend
+The Compose stack runs FastAPI and the React/Nginx frontend separately, waits for backend
 health, mounts OAuth files at runtime, and keeps logs in a persistent volume.
 See `deployment/README.md` for secret-storage and OAuth limitations.
 
-Public multi-user hosting requires web OAuth redirects and encrypted per-user
-token storage; the current Desktop OAuth flow is intentionally scoped to this
-single-user project.
+The web API supports separate Google accounts, explicit account switching,
+30-day renewable logins, and encrypted persistent storage on one host. Use HTTPS
+and an externally managed encryption key when deploying.
+Multi-host deployment still requires replacing SQLite and local file locks.
+
+## Conversation regression coverage
+
+### Reply latency
+
+Exact standalone reads such as `Show my tasks tomorrow` and `List events today`
+skip model interpretation, but still fetch fresh Calendar data. Qualified queries,
+follow-ups, and writes use the normal planner and all existing safety checks.
+Planner context uses compact JSON without dropping fields or conversation history.
+Workflow `graph_node_finished` logs include `duration_ms` for latency diagnosis.
+
+`python -m evaluation.benchmark_reads` compares the shortcut with a model-driven
+equivalent using a synthetic calendar (three samples each). One local run measured
+median 0.015 seconds versus 1.799 seconds; these are not production latency promises
+and exclude Google network time. No model was downgraded and calendar checks were
+not cached or removed.
+
+The planner receives the last 12 conversation messages, including completed actions.
+Bare clock times retain an established PM interpretation; an ambiguous time that
+would otherwise create an event earlier today asks for AM/PM clarification.
+Questions such as “What are my next tasks right now?” list remaining events.
+
+Explicit requests such as “Move Yoga to 11 PM and keep Homework at 9:50 PM”
+produce a reviewed plan containing both changes. Existing event durations are
+preserved, including moves across midnight. Plans require confirmation and are
+rechecked before execution. Duplicate matches, overlapping destinations, and
+swaps requiring a temporary slot are rejected without writes. Up to five actions
+are supported in a coordinated plan; this is not a general-purpose arbitrary
+calendar optimizer. Calendar writes are not transactional; partial failures are
+reported rather than retried automatically.
+
+Run deterministic regressions with `python -m unittest tests.test_conversation_repairs`.
+Run `python -m evaluation.run_conversation_repairs` to replay the conversation
+against the configured OpenRouter model using an in-memory calendar. The latter
+uses model credits but never contacts Google Calendar.
 
 ## Future improvements
 
-- Replace in-memory LangGraph checkpoints with PostgreSQL or Redis.
-- Add web OAuth and encrypted multi-user token storage.
+- Move the single-host SQLite store and file locks to PostgreSQL for multiple hosts.
 - Run the evaluation dataset automatically against configured model versions.
 - Add recurring-event editing and attendee management.
 - Add rate limiting, authentication, and distributed tracing for public use.

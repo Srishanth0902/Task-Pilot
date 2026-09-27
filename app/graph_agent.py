@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from time import perf_counter
 from datetime import datetime, timedelta
 from typing import Annotated, Literal, TypedDict
 
@@ -30,6 +31,8 @@ from app.date_utils import (
     local_now,
 )
 from app.observability import log_workflow, safe_error_detail
+from app.rescheduling import relocation_plan
+from app.multi_event import plan_moves
 from app.scheduling import (
     build_bulk_changes,
     day_window,
@@ -51,10 +54,24 @@ Intent = Literal[
 ]
 
 
+class EventMove(BaseModel):
+    """One explicitly requested move within a multi-event request."""
+
+    search_query: str
+    start_time: str
+    event_id: str | None = None
+    create_if_missing: bool = False
+    duration_minutes: int = Field(default=60, ge=1, le=1440)
+
+
 class QueryPlan(BaseModel):
     """Structured interpretation returned by the LLM."""
 
     intent: Intent
+    moves: list[EventMove] | None = Field(default=None, min_length=1, max_length=5)
+    conflict_strategy: Literal["alternatives", "propose_relocation", "relocate"] | None = None
+    displacement_query: str | None = None
+    relocation_date: str | None = None
     search_query: str | None = None
     event_id: str | None = None
     title: str | None = None
@@ -102,13 +119,39 @@ Return the requested intent and only the fields the user supplied or that can
 be safely inferred. Resolve relative dates to timezone-aware ISO-8601.
 
 Rules:
-- create needs title and start_time; end_time defaults to one hour later.
+- create needs title, start_time, and an explicit duration or end time. Never
+  invent a one-hour duration. If the user omits duration, leave end_time and
+  duration_minutes empty so the graph asks before creating anything.
 - list means list upcoming events. search means find events without changing.
+- "What tasks are there for now?" and "What should I do next?" mean list from
+  the current time. "Tasks for today" means list today's full calendar.
+- Recent conversation messages are provided. Use completed events as context too.
+  If the user refers to 9:50 immediately after an event at 9:50 PM, preserve PM.
+  Never guess a past AM time when evening context is explicit.
+- For explicit moves of TWO OR MORE named events, use intent=update and populate
+  moves with every event's search_query and timezone-aware destination start_time.
+  Example: "Move Yoga to 11 PM and keep Homework at 9:50 PM" => two moves,
+  Yoga at 23:00 and Homework at 21:50 on the referenced date. Search existing
+  events even if one was mistakenly created at an earlier time. Do not drop a
+  clause. Do not populate moves for an automatic next-available-slot relocation.
+  If a clause explicitly schedules a new named task, set create_if_missing=true
+  for that item and duration_minutes if provided. Otherwise a missing event
+  must be clarified, never silently created.
+- To fit a NEW urgent event into an occupied slot, use create for the new event.
+  Set conflict_strategy=propose_relocation when urgency/rearranging is mentioned
+  without explicit permission to move existing events. Set conflict_strategy=relocate
+  only when the user explicitly instructs moving the existing conflicting event
+  to the next available slot; displacement_query identifies that event (e.g. Yoga).
+  This coordinated create-plus-relocate request IS supported as one workflow.
+  Never delete an existing event to make room. Relocation searches later the same
+  day within working hours, preserves duration and requires a new choice if full.
+  If the user explicitly chooses another day for the displaced event, set
+  relocation_date=YYYY-MM-DD and preserve the NEW event's original start/end.
 - "Rename X to Y" is update, search_query=X, title=Y. Never use search
   as the final intent for a rename or location/description change.
 - For vague or unsupported requests, return intent=unknown. Do not omit the
   structured response. This workflow supports one action per turn; if several
-  independent actions are requested, return unknown rather than executing only one.
+  unsupported independent actions are requested, return unknown rather than executing only one.
 - update/delete must never invent event_id. Supply search_query when no id is
   known so the graph searches first.
 - For "delete my meeting tomorrow", intent is delete, search_query is meeting,
@@ -173,8 +216,10 @@ def _coerce_query_plan(raw) -> QueryPlan:
 
 def _clock_from_text(text: str) -> tuple[int, int] | None:
     match = re.search(
-        r"(?:\bat\s+|^)(?P<hour>\d{1,2})(?::(?P<minute>\d{2}))?\s*"
-        r"(?P<period>am|pm)?\b",
+        r"(?:\bat\s+|^)(?P<hour>\d{1,2})(?!\.\d)(?::(?P<minute>\d{2}))?\s*"
+        r"(?P<period>am|pm)?\b"
+        r"(?!\s*(?:(?:and\s+)?(?:a\s+)?half\s+(?:an?\s+)?)?"
+        r"(?:hours?|hrs?|minutes?|mins?)\b)",
         text,
         re.IGNORECASE,
     )
@@ -188,6 +233,164 @@ def _clock_from_text(text: str) -> tuple[int, int] | None:
     if period:
         hour = hour % 12 + (12 if period == "pm" else 0)
     return hour, minute
+
+
+_DURATION_WORDS = {
+    "a": 1,
+    "an": 1,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+_CLOCK_TOKEN = r"\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?)?"
+
+
+def _duration_minutes_from_text(text: str) -> int | None:
+    """Extract only an explicit event length, not relative times like 'in 2 hours'."""
+    lowered = " ".join(text.casefold().split())
+    amount_token = r"\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve"
+    prefix = r"(?:for|lasting|lasts?|make it|duration(?:\s+of|\s+is)?)\s+(?:about\s+)?"
+
+    def amount_value(token: str) -> float:
+        return float(_DURATION_WORDS[token]) if token in _DURATION_WORDS else float(token)
+
+    def duration_match(body: str):
+        return re.search(rf"\b{prefix}{body}\b", lowered) or re.fullmatch(
+            rf"(?:about\s+)?{body}[.!]?", lowered
+        )
+
+    # Natural fractional forms frequently used as a duration-only follow-up:
+    # "1 and half hour", "one and a half hours", and "an hour and a half".
+    match = duration_match(
+        rf"(?P<whole>{amount_token})\s+(?:and\s+)?(?:a\s+)?half\s+(?:an?\s+)?hours?"
+    )
+    if not match:
+        match = duration_match(
+            rf"(?P<whole>{amount_token})\s+hours?\s+and\s+(?:a\s+)?half"
+        )
+    if match:
+        minutes = round((amount_value(match.group("whole")) + 0.5) * 60)
+        if not 1 <= minutes <= 1440:
+            raise ValueError("Event duration must be between 1 minute and 24 hours.")
+        return minutes
+
+    # Also accept compound lengths such as "1 hour and 30 minutes".
+    match = duration_match(
+        rf"(?P<hours>{amount_token})\s*hours?\s+(?:and\s+)?"
+        rf"(?P<minutes>{amount_token})\s*minutes?"
+    )
+    if match:
+        minutes = round(
+            amount_value(match.group("hours")) * 60
+            + amount_value(match.group("minutes"))
+        )
+        if not 1 <= minutes <= 1440:
+            raise ValueError("Event duration must be between 1 minute and 24 hours.")
+        return minutes
+
+    if re.search(r"\b(?:for|lasting|make it)\s+(?:about\s+)?(?:half an?|a half)\s+hours?\b", lowered):
+        return 30
+    if re.search(r"\b(?:for|lasting|make it)\s+(?:about\s+)?(?:a\s+)?quarter\s+(?:of an?\s+)?hours?\b", lowered):
+        return 15
+    match = re.search(
+        r"\b(?:for|lasting|lasts?|make it|duration(?:\s+of|\s+is)?)\s+"
+        r"(?:about\s+)?(?P<amount>\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*"
+        r"(?P<unit>hours?|hrs?|minutes?|mins?)\b",
+        lowered,
+    )
+    if not match:
+        match = re.fullmatch(
+            r"(?:about\s+)?(?P<amount>\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)\s*"
+            r"(?P<unit>hours?|hrs?|minutes?|mins?)[.!]?",
+            lowered,
+        )
+    if not match:
+        # Hyphenated lengths are unambiguous: "a 45-minute session". A plain
+        # "in two hours" deliberately does not match because that is a start time.
+        match = re.search(
+            r"\b(?P<amount>\d+(?:\.\d+)?)\s*-(?P<unit>hours?|minutes?)\b",
+            lowered,
+        )
+    if not match:
+        return None
+    token = match.group("amount")
+    amount = amount_value(token)
+    minutes = round(amount * 60) if match.group("unit").startswith(("hour", "hr")) else round(amount)
+    if not 1 <= minutes <= 1440:
+        raise ValueError("Event duration must be between 1 minute and 24 hours.")
+    return minutes
+
+
+def _explicit_end_from_text(start: datetime, text: str) -> datetime | None:
+    """Resolve an explicit 'until/end/from-to' clock relative to the start."""
+    patterns = (
+        rf"\b(?:until|through|ending\s+at|ends?\s+at)\s+(?P<end>{_CLOCK_TOKEN})\b",
+        rf"\b(?:from|between)\s+{_CLOCK_TOKEN}\s+(?:to|until|and|-)\s+(?P<end>{_CLOCK_TOKEN})\b",
+    )
+    match = next((found for pattern in patterns if (found := re.search(pattern, text, re.I))), None)
+    if not match:
+        return None
+    fragment = match.group("end")
+    clock = _clock_from_text(fragment)
+    if not clock:
+        return None
+    has_period = bool(re.search(r"(?:a\.?m\.?|p\.?m\.?)", fragment, re.I))
+    if has_period or clock[0] > 12:
+        end = start.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+        if end <= start:
+            end += timedelta(days=1)
+    else:
+        hours = {clock[0]}
+        if 1 <= clock[0] <= 11:
+            hours.add(clock[0] + 12)
+        candidates = [
+            start.replace(hour=hour, minute=clock[1], second=0, microsecond=0) + timedelta(days=day)
+            for day in (0, 1)
+            for hour in hours
+        ]
+        end = min(candidate for candidate in candidates if candidate > start)
+    if end - start > timedelta(hours=24):
+        raise ValueError("Event duration must be no more than 24 hours.")
+    return end
+
+
+def _complete_create_duration(action: dict, query: str) -> None:
+    """Require a user-supplied create duration and calculate its exact end."""
+    if action.get("intent") != "create":
+        return
+    minutes = _duration_minutes_from_text(query)
+    start = _plan_datetime(action["start_time"]) if action.get("start_time") else None
+    explicit_end = _explicit_end_from_text(start, query) if start else None
+    if minutes is not None:
+        action["duration_minutes"] = minutes
+        action["duration_explicit"] = True
+        action.pop("awaiting_duration", None)
+        if start:
+            action["end_time"] = (start + timedelta(minutes=minutes)).isoformat()
+        return
+    if explicit_end:
+        action["duration_minutes"] = round((explicit_end - start).total_seconds() / 60)
+        action["duration_explicit"] = True
+        action["end_time"] = explicit_end.isoformat()
+        action.pop("awaiting_duration", None)
+        return
+    if action.get("duration_explicit") and action.get("duration_minutes") and start:
+        action["end_time"] = (start + timedelta(minutes=action["duration_minutes"])).isoformat()
+        action.pop("awaiting_duration", None)
+        return
+    # Discard a model-supplied default because the user did not authorize it.
+    action.pop("end_time", None)
+    action.pop("duration_minutes", None)
+    action["awaiting_duration"] = True
 
 
 def _plan_datetime(value: str) -> datetime:
@@ -214,11 +417,16 @@ def _normalise_action_times(action: dict, query: str) -> None:
     start = _plan_datetime(action["start_time"])
     end = _plan_datetime(action["end_time"]) if action.get("end_time") else None
     duration = end - start if end else timedelta(hours=1)
+    explicit_period = bool(re.search(r"\d\s*(?:am|pm)\b", query, re.I))
+    resolved_hour = clock[0]
+    if not explicit_period and 1 <= clock[0] <= 12 and start.hour % 12 == clock[0] % 12:
+        resolved_hour = start.hour
     corrected_start = start.replace(
-        hour=clock[0], minute=clock[1], second=0, microsecond=0
+        hour=resolved_hour, minute=clock[1], second=0, microsecond=0
     )
     action["start_time"] = corrected_start.isoformat()
-    action["end_time"] = (corrected_start + duration).isoformat()
+    if end or action.get("intent") != "create":
+        action["end_time"] = (corrected_start + duration).isoformat()
 
 
 def _requests_free_slot_scheduling(query: str) -> bool:
@@ -357,7 +565,12 @@ def _needs_search(action: dict) -> bool:
 def _action_ready(action: dict) -> bool:
     intent = action.get("intent")
     if intent == "create":
-        return bool(action.get("title") and action.get("start_time"))
+        return bool(
+            action.get("title")
+            and action.get("start_time")
+            and action.get("end_time")
+            and not action.get("awaiting_duration")
+        )
     if intent == "update":
         changes = any(
             action.get(field) is not None
@@ -407,6 +620,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 "intent": state.get("intent"),
             }
             log_workflow("graph_node_started", **context)
+            started = perf_counter()
             try:
                 result = handler(state)
             except Exception as error:
@@ -417,6 +631,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 **context,
                 resulting_intent=result.get("intent", state.get("intent")),
                 has_error=bool(result.get("error")),
+                duration_ms=round((perf_counter() - started) * 1000, 2),
             )
             if result.get("response"):
                 log_workflow(
@@ -452,23 +667,55 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 "verified": False,
                 "tool_result": None,
             }
+        previous = state.get("pending_action")
         context = {
-            "pending_action": state.get("pending_action"),
+            "pending_action": previous,
+            "recent_messages": [{"role": m.type, "content": m.content} for m in state.get("messages", [])[-12:]],
             "selected_event": state.get("selected_event"),
             "candidate_events": state.get("candidate_events", []),
             "conflict_events": state.get("conflict_events", []),
             "alternatives": state.get("alternatives", []),
         }
         try:
-            raw = structured_planner.invoke(
-                [
-                    SystemMessage(content=calendar_planner_prompt()),
-                    HumanMessage(
-                        content=f"Context:\n{json.dumps(context, default=str)}\n\n"
-                        f"User message:\n{query}"
-                    ),
-                ]
-            )
+            duration_followup = False
+            if (
+                previous
+                and previous.get("intent") == "create"
+                and previous.get("awaiting_duration")
+            ):
+                try:
+                    duration_followup = _duration_minutes_from_text(query) is not None
+                except ValueError:
+                    # Preserve the pending action so the validation path can
+                    # return the precise duration error below.
+                    duration_followup = True
+                if not duration_followup and previous.get("start_time"):
+                    duration_followup = bool(
+                        _explicit_end_from_text(
+                            _plan_datetime(previous["start_time"]), query
+                        )
+                    )
+            # Only standalone, exact read requests bypass the model. Follow-ups
+            # and every mutation retain the full interpretation/safety workflow.
+            # A duration-only answer is deterministic and bypasses the model so
+            # it cannot replace the already-confirmed title or start time.
+            quick_read = re.fullmatch(r"(?:show|list)(?: me)? (?:my )?(?:tasks|events)(?: for)? (today|tomorrow)[.!]?", query, re.I)
+            if duration_followup:
+                raw = QueryPlan(intent="create", continue_previous=True)
+            elif quick_read and not previous:
+                reference = local_now() + timedelta(days=quick_read.group(1).lower() == "tomorrow")
+                beginning, ending = day_window(reference)
+                raw = QueryPlan(intent="list", time_min=beginning.isoformat(), time_max=ending.isoformat())
+            else:
+                raw = structured_planner.invoke(
+                    [
+                        SystemMessage(content=calendar_planner_prompt()),
+                        HumanMessage(
+                            content=f"Context:\n{json.dumps(context, default=str, separators=(',', ':'), ensure_ascii=False)}\n\n"
+                            f"User message:\n{query}"
+                        ),
+                    ]
+                )
             plan = _coerce_query_plan(raw)
         except Exception as error:
             return {
@@ -476,7 +723,31 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 "verified": False,
             }
 
-        previous = state.get("pending_action")
+        incomplete = re.fullmatch(r"(?:please )?(?:move|reschedule) (?:my )?([\w ]+?) (today|tomorrow)[.!]?", query, re.I)
+        if incomplete and not previous and not re.search(r"\b(?:to|by|at|and|next|available|all|every)\b|\d", incomplete.group(1), re.I):
+            # A day alone is not a destination clock. Never accept an invented
+            # midnight from the model for an incomplete rescheduling request.
+            beginning, ending = day_window(local_now() + timedelta(days=incomplete.group(2).lower() == "tomorrow"))
+            plan = QueryPlan(intent="update", search_query=incomplete.group(1), time_min=beginning.isoformat(), time_max=ending.isoformat())
+        filtered_read = re.fullmatch(r"(?:find|show|list) (?:all )?(?:my )?(.+?) (?:sessions|tasks|events) (today|tomorrow)[.!]?", query, re.I)
+        if filtered_read:
+            beginning, ending = day_window(local_now() + timedelta(days=filtered_read.group(2).lower() == "tomorrow"))
+            plan = QueryPlan(intent="search", search_query=filtered_read.group(1), time_min=beginning.isoformat(), time_max=ending.isoformat())
+        clear_day = re.fullmatch(r"(?:delete|remove) all (?:my )?(?:events|tasks) (today|tomorrow)[.!]?", query, re.I)
+        if clear_day:
+            beginning, ending = day_window(local_now() + timedelta(days=clear_day.group(1).lower() == "tomorrow"))
+            plan = QueryPlan(intent="bulk_delete", search_query="events", time_min=beginning.isoformat(), time_max=ending.isoformat())
+        if not previous and re.fullmatch(r"(?:delete|remove) my [\w ]+", query, re.I) and not re.search(r"\b(?:today|tomorrow|week|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b", query, re.I):
+            # A date-free request must not acquire an invented 'today' filter.
+            plan.time_min = plan.time_max = None
+        if plan.intent == "unknown" and re.search(r"\b(?:what|which|show|list)\b", query, re.I) and re.search(r"\b(?:tasks?|events?|schedule|next)\b", query, re.I) and not re.search(r"\b(?:delete|move|remove|create)\b", query, re.I):
+            now = local_now()
+            beginning, ending = day_window(now)
+            if re.search(r"\btomorrow\b", query, re.I):
+                beginning, ending = day_window(now + timedelta(days=1))
+            elif re.search(r"\b(?:now|next)\b", query, re.I):
+                beginning = now
+            plan = QueryPlan(intent="list", time_min=beginning.isoformat(), time_max=ending.isoformat())
         if plan.intent == "unknown":
             if re.fullmatch(r"(?:please\s+)?(?:add|create|schedule)\s+(?:a|an)\s+(?:calendar\s+)?event[.!]?", query, re.I):
                 plan = QueryPlan(intent="create")
@@ -493,14 +764,51 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         rename = re.fullmatch(r"\s*rename\s+(.+?)\s+to\s+(.+?)\s*[.!]?", query, re.I)
         if rename:
             plan = QueryPlan(intent="update", search_query=rename.group(1), title=rename.group(2))
+        if not plan.moves or len(plan.moves) < 2:
+            clauses = list(re.finditer(r"\b(?:move|shift|reschedule|keep|put)\s+(.+?)\s+(?:to|at)\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm))\b", query, re.I))
+            if len(clauses) >= 2:
+                if len(clauses) > 5 or re.search(r"\b(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)\b|\d{4}-\d{2}-\d{2}", query, re.I):
+                    return {"clarification": "Please give up to five event titles with exact destination dates and times so I can review every change together.", "pending_action": None, "tool_result": None, "verified": False}
+                reference = local_now()
+                if re.search(r"\btomorrow\b", query, re.I):
+                    reference += timedelta(days=1)
+                moves = []
+                for clause in clauses:
+                    clock_value = _clock_from_text(clause.group(2))
+                    if clock_value:
+                        moves.append(EventMove(search_query=clause.group(1), start_time=reference.replace(hour=clock_value[0], minute=clock_value[1], second=0, microsecond=0).isoformat()))
+                if len(moves) >= 2:
+                    plan = QueryPlan(intent="update", moves=moves)
+        if plan.moves and len(plan.moves) == 1:
+            move = plan.moves[0]
+            plan.search_query, plan.event_id, plan.start_time = move.search_query, move.event_id, move.start_time
+            plan.moves = None
         deterministic_free_slot_followup = bool(
             previous
             and previous.get("intent") == "free_slot"
             and plan.intent in {"free_slot", "unknown"}
             and _is_free_slot_range_followup(query)
         )
+        try:
+            deterministic_duration_followup = bool(
+                previous
+                and previous.get("intent") == "create"
+                and previous.get("awaiting_duration")
+                and (
+                    _duration_minutes_from_text(query) is not None
+                    or (
+                        previous.get("start_time")
+                        and _explicit_end_from_text(_plan_datetime(previous["start_time"]), query)
+                    )
+                )
+            )
+        except ValueError:
+            # Continue the pending create so validation can return a safe,
+            # user-facing duration error instead of losing conversation state.
+            deterministic_duration_followup = True
         continuing = bool(
             previous and (plan.continue_previous or deterministic_free_slot_followup
+                          or deterministic_duration_followup
                           or (state.get("candidate_events") and _select_candidate(query, state["candidate_events"], None)))
         )
         if continuing:
@@ -514,7 +822,31 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             candidates = []
             selected = None
 
+        # An explicit follow-up can authorize relocating the preserved conflict.
+        move_existing = bool(re.search(r"\b(?:move|shift|reschedule)\b", query, re.I))
+        next_slot = bool(re.search(r"\b(?:next|available|free)\b.*\b(?:slot|time)\b", query, re.I))
+        negated = bool(re.search(r"\b(?:not|don't|do not|never)\b", query, re.I))
+        if previous and state.get("conflict_events") and move_existing and next_slot and not negated:
+            action = {**previous, "conflict_strategy": "relocate"}
+            if plan.relocation_date:
+                action["relocation_date"] = plan.relocation_date
+            action["start_time"] = previous.get("start_time") or previous.get("previous_start")
+            action["end_time"] = previous.get("end_time") or previous.get("previous_end")
+        if action.get("intent") == "create":
+            if negated and move_existing:
+                action["conflict_strategy"] = "alternatives"
+            if move_existing and next_slot and not negated:
+                action["conflict_strategy"] = "relocate"
+                named = [e.get("title", "") for e in state.get("conflict_events", []) if e.get("title", "").casefold() in query.casefold()]
+                if len(named) == 1:
+                    action["displacement_query"] = named[0]
+            if action.get("conflict_strategy") == "relocate":
+                action["relocation_authorized"] = move_existing and next_slot and not negated
+            if re.search(r"\burgent\b|\brearrange\b", query, re.I) and not action.get("conflict_strategy"):
+                action["conflict_strategy"] = "propose_relocation"
+
         if action.get("search_query"):
+            action["search_query"] = re.sub(r"^(?:my|the)\s+", "", action["search_query"], flags=re.I)
             action["search_query"] = re.sub(
                 r"\s+(?:sessions?|tasks?|events?)$", "", action["search_query"], flags=re.I
             )
@@ -525,8 +857,27 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 action["event_id"] = selected["event_id"]
         _apply_followup_time(action, selected, query)
         try:
+            # Recover the exact clock from the previous completed event when an
+            # otherwise ambiguous clock explicitly refers back to it.
+            bare = _clock_from_text(query)
+            previous_event = state.get("tool_result") or {}
+            if action.get("intent") == "create" and action.get("start_time") and bare and not re.search(r"\d\s*(?:am|pm)\b|\b(?:morning|evening|UTC|GMT)\b", query, re.I):
+                reference = previous_event.get("start")
+                if reference and "T" in reference:
+                    prior = _plan_datetime(reference)
+                    proposed = _plan_datetime(action["start_time"])
+                    if (prior.hour % 12, prior.minute) == (bare[0] % 12, bare[1]) and proposed.date() == prior.date():
+                        duration = _plan_datetime(action["end_time"]) - proposed if action.get("end_time") else timedelta(hours=1)
+                        action["start_time"], action["end_time"] = prior.isoformat(), (prior + duration).isoformat()
             _normalise_action_times(action, query)
             _complete_free_slot_action(action, query, continuing=continuing)
+            _complete_create_duration(action, query)
+            if action.get("intent") == "create" and action.get("start_time") and bare and not re.search(r"\d\s*(?:am|pm)\b|\b(?:morning|evening|UTC|GMT)\b", query, re.I):
+                proposed = _plan_datetime(action["start_time"])
+                now = local_now()
+                if 1 <= bare[0] <= 12 and proposed.date() == now.date() and proposed < now:
+                    return {"intent": "create", "pending_action": action, "tool_result": None, "error": None, "verified": False,
+                            "clarification": "Do you mean AM or PM? That time would already be in the past today, so I have not created anything."}
         except ValueError as error:
             return {"error": f"Invalid event time: {error}"}
 
@@ -555,6 +906,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         if state.get("confirmation_status") == "declined":
             return "generate_response"
         if state.get("confirmation_status") == "approved":
+            if action.get("coordinated"):
+                return "execute_relocation"
             if action.get("intent") in {"bulk_update", "bulk_delete"}:
                 return "execute_bulk_action"
             if action.get("intent") in {"create", "update"} and action.get("start_time"):
@@ -564,6 +917,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return "generate_response"
         if action.get("intent") == "unknown":
             return "generate_response"
+        if action.get("moves"):
+            return "plan_explicit_moves"
         if action.get("intent") in {"bulk_update", "bulk_delete"}:
             return "search_calendar"
         if action.get("intent") == "free_slot":
@@ -579,6 +934,23 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         if action.get("intent") == "delete" and _action_ready(action):
             return "request_confirmation"
         return "execute_action" if _action_ready(action) else "generate_response"
+
+    def plan_explicit_moves(state: CalendarAgentState):
+        action = dict(state.get("pending_action") or {})
+        try:
+            targets = [_plan_datetime(m["start_time"]) for m in action["moves"]]
+            beginning = min(day_window(local_now())[0], day_window(min(targets))[0])
+            ending = day_window(max(targets))[1] + timedelta(days=1)
+            if ending - beginning > timedelta(days=32):
+                raise ValueError("Please limit a coordinated move to a 31-day window.")
+            result = invoke_tool(state, "list_calendar_events", {"max_results": 250, "time_min": beginning, "time_max": ending})
+            if not result.get("success") or len(result.get("events", [])) >= 250:
+                raise ValueError("I could not safely load all affected events. Nothing was changed.")
+            changes = plan_moves(result.get("events", []), action["moves"])
+            action.update(coordinated=True, start_time=beginning.isoformat())
+            return {"pending_action": action, "proposed_changes": changes}
+        except Exception as error:
+            return {"clarification": safe_error_detail(error)}
 
     def search_calendar(state: CalendarAgentState):
         action = dict(state.get("pending_action") or {})
@@ -904,6 +1276,29 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         if not conflicts:
             return {"conflict_events": [], "alternatives": []}
 
+        if action.get("intent") == "create" and action.get("conflict_strategy") in {"relocate", "propose_relocation"}:
+            if len(result.get("events", [])) >= 250:
+                return {"clarification": "There are too many events to safely rearrange this window. Please narrow the request."}
+            action["end_time"] = end.isoformat()
+            try:
+                planning_events = list(result.get("events", []))
+                if action.get("relocation_date") and action["relocation_date"] != start.date().isoformat():
+                    target_start, target_end = day_window(datetime.fromisoformat(action["relocation_date"]))
+                    extra = invoke_tool(state, "list_calendar_events", {"max_results": 250, "time_min": target_start, "time_max": target_end})
+                    if not extra.get("success") or len(extra.get("events", [])) >= 250:
+                        return {"error": "Could not safely check the replacement day. Nothing was changed."}
+                    planning_events.extend(extra.get("events", []))
+                changes = relocation_plan(planning_events, conflicts, action)
+            except Exception as error:
+                return {"pending_action": action, "conflict_events": conflicts, "clarification": safe_error_detail(error)}
+            action["coordinated"] = True
+            # Permission to move Yoga does not authorize moving another event too.
+            target = (action.get("displacement_query") or "").casefold()
+            exact_scope = bool(target) and all(target in e.get("title", "").casefold() for e in conflicts)
+            action["relocation_authorized"] = bool(action.get("relocation_authorized") and exact_scope)
+            return {"pending_action": action, "conflict_events": conflicts,
+                    "affected_events": conflicts, "proposed_changes": changes}
+
         window_start, window_end = working_window(start)
         alternative_start = max(end, window_start)
         alternatives = (
@@ -931,7 +1326,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             "conflict_events": conflicts,
             "alternatives": alternatives,
             "clarification": f"That time conflicts with {conflict_names}. "
-            f"Available alternatives: {options}. Which time should I use?",
+            f"Available alternatives: {options}. Which time should I use? "
+            "You can also ask me to move the existing event to the next available slot.",
         }
 
     def route_after_conflict_check(state: CalendarAgentState) -> str:
@@ -939,7 +1335,62 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return "handle_error"
         if state.get("clarification"):
             return "generate_response"
+        action = state.get("pending_action") or {}
+        if action.get("coordinated"):
+            return "execute_relocation" if action.get("relocation_authorized") else "request_confirmation"
         return "execute_action"
+
+    def execute_relocation(state: CalendarAgentState):
+        """Recheck the reviewed plan, then move blockers before creating.
+
+        Google Calendar is not transactional. Stop at the first failure and
+        report completed moves; never retry or claim an automatic rollback.
+        """
+        action = state.get("pending_action") or {}
+        changes = state.get("proposed_changes", [])
+        completed = []
+        try:
+            day_start, day_end = day_window(_plan_datetime(action["start_time"]))
+            latest_end = max(_plan_datetime(c.get("old_end") or c["new_end"]) for c in changes)
+            latest_end = max(latest_end, max(_plan_datetime(c["new_end"]) for c in changes))
+            day_end = max(day_end, day_window(latest_end)[1])
+            current = invoke_tool(state, "list_calendar_events", {"max_results": 250, "time_min": day_start, "time_max": day_end})
+            if not current.get("success"):
+                raise ValueError("Could not recheck the calendar. No changes were made.")
+            events = current.get("events", [])
+            if len(events) >= 250:
+                raise ValueError("The calendar window is too large to safely verify. No changes were made.")
+            by_id = {e.get("event_id"): e for e in events}
+            moving = {c["event_id"] for c in changes if c["action"] == "update"}
+            for change in changes:
+                if change["action"] == "update":
+                    old = by_id.get(change["event_id"], {})
+                    if old.get("start") != change["old_start"] or old.get("end") != change["old_end"]:
+                        raise ValueError("The calendar changed since planning. Please request a fresh plan; nothing was changed.")
+                if overlapping_events(events, _plan_datetime(change["new_start"]), _plan_datetime(change["new_end"]), exclude_event_ids=moving):
+                    raise ValueError("A proposed time is now occupied. Please request a fresh plan; nothing was changed.")
+            for change in changes:
+                if change["action"] == "update":
+                    result = invoke_tool(state, "update_calendar_event", {"event_id": change["event_id"], "start_time": change["new_start"], "end_time": change["new_end"]})
+                else:
+                    create_args = {k: v for k, v in action.items() if k in {"description", "location"} and v is not None}
+                    create_args.update(title=change["title"], start_time=change["new_start"], end_time=change["new_end"])
+                    result = invoke_tool(state, "create_calendar_event", create_args)
+                if not result.get("success") or not result.get("event_id"):
+                    raise ValueError("A calendar operation failed. Check your calendar before retrying.")
+                completed.append(change)
+            text = "Schedule updated:\n" + "\n".join(
+                f"{'Moved' if c['action'] == 'update' else 'Created'} {c['title']} — {format_local_range(c['new_start'], c['new_end'])}" for c in completed)
+            return {"messages": [AIMessage(content=text)], "response": text, "verified": True,
+                    "pending_action": None, "proposed_changes": [], "conflict_events": [],
+                    "awaiting_confirmation": False, "tool_result": {"success": True, "results": completed}}
+        except Exception as error:
+            detail = safe_error_detail(error)
+            done = "; ".join(f"Moved {c['title']} to {format_local_range(c['new_start'], c['new_end'])}" for c in completed)
+            text = f"Could not finish rearranging: {detail}" + (f" Completed: {done}. These moves have not been undone." if done else " No changes were confirmed; check the calendar if a request timed out.")
+            return {"messages": [AIMessage(content=text)], "response": text, "error": detail,
+                    "verified": False, "pending_action": None, "proposed_changes": [],
+                    "awaiting_confirmation": False, "tool_result": {"success": False, "results": completed}}
 
     def request_confirmation(state: CalendarAgentState):
         changes = list(state.get("proposed_changes", []))
@@ -1101,13 +1552,18 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 text = f"Available {duration_label} slots:\n" + "\n".join(rows)
             clear = True
         elif not state.get("verified") and intent == "create":
-            missing = []
             action = state.get("pending_action") or {}
-            if not action.get("title"):
-                missing.append("a title")
-            if not action.get("start_time"):
-                missing.append("a start time")
-            text = "Please provide " + " and ".join(missing) + "."
+            if action.get("awaiting_duration") and action.get("title") and action.get("start_time"):
+                text = f"How long should {action['title']} last? For example, 30 minutes or 1 hour."
+            else:
+                missing = []
+                if not action.get("title"):
+                    missing.append("a title")
+                if not action.get("start_time"):
+                    missing.append("a start time")
+                if action.get("awaiting_duration"):
+                    missing.append("a duration")
+                text = "Please provide " + " and ".join(missing) + "."
             clear = False
         elif not state.get("verified") and intent == "update":
             text = "What would you like to change about that event?"
@@ -1167,11 +1623,15 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
     workflow = StateGraph(CalendarAgentState)
     workflow.add_node("understand_query", traced_node("understand_query", understand_query))
     workflow.add_node("search_calendar", traced_node("search_calendar", search_calendar))
+    workflow.add_node("plan_explicit_moves", traced_node("plan_explicit_moves", plan_explicit_moves))
+    workflow.add_conditional_edges("plan_explicit_moves", route_after_planning)
     workflow.add_node("resolve_event", traced_node("resolve_event", resolve_event))
     workflow.add_node("load_calendar_window", traced_node("load_calendar_window", load_calendar_window))
     workflow.add_node("find_free_slot", traced_node("find_free_slot", find_free_slot))
     workflow.add_node("plan_bulk_operation", traced_node("plan_bulk_operation", plan_bulk_operation))
     workflow.add_node("detect_conflicts", traced_node("detect_conflicts", detect_conflicts))
+    workflow.add_node("execute_relocation", traced_node("execute_relocation", execute_relocation))
+    workflow.add_edge("execute_relocation", END)
     workflow.add_node("request_confirmation", traced_node("request_confirmation", request_confirmation))
     workflow.add_node("execute_bulk_action", traced_node("execute_bulk_action", execute_bulk_action))
     workflow.add_node("execute_action", traced_node("execute_action", execute_action))

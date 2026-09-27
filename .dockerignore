@@ -4,9 +4,17 @@
 __pycache__
 *.py[cod]
 .env
+.env.production
 credentials.json
 token.json
+credentials.web.json
+data
+*.sqlite3*
 logs
 evaluation/results
 tests
+**/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report
 README.md

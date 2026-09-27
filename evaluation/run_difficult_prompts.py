@@ -93,12 +93,13 @@ def run_case(case):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ids", nargs="*", help="Run just these case IDs")
+    parser.add_argument("--workers", type=int, choices=range(1, 4), default=1, help="Concurrent model requests (default 1 to avoid provider in-flight credit limits)")
     args = parser.parse_args()
     root = Path(__file__).parent
     data = json.loads((root / "difficult_prompts.json").read_text(encoding="utf-8"))
     now = datetime.fromisoformat(data["reference_now"])
     with patch("app.graph_agent.local_now", return_value=now):
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
             cases = [c for c in data["cases"] if not args.ids or c["id"] in args.ids]
             results = list(pool.map(run_case, cases))
     if args.ids and (root / "difficult_results.json").exists():

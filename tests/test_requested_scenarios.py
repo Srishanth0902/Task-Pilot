@@ -30,7 +30,7 @@ def event(event_id: str, title: str, start: str, end: str) -> dict:
 
 
 class RequestedPromptScenarios(unittest.TestCase):
-    def test_normal_add_dsa_tomorrow_at_6_uses_ist(self):
+    def test_normal_add_dsa_tomorrow_at_6_asks_duration_then_uses_ist(self):
         service = FakeService()
         conversation = CalendarConversation(
             None,
@@ -41,11 +41,15 @@ class RequestedPromptScenarios(unittest.TestCase):
                     title="DSA",
                     start_time="2026-09-11T06:00:00Z",
                     end_time="2026-09-11T07:00:00Z",
-                )
+                ),
+                QueryPlan(intent="unknown"),
             ),
         )
 
-        result = conversation.ask("Add DSA tomorrow at 6", thread_id="normal-add")
+        clarification = conversation.ask("Add DSA tomorrow at 6", thread_id="normal-add")
+        self.assertIn("How long should DSA last?", clarification["response"])
+        self.assertFalse(service.events().calls)
+        result = conversation.ask("1 hour", thread_id="normal-add")
 
         insert = [call for call in service.events().calls if call[0] == "insert"][-1]
         self.assertEqual(
@@ -140,7 +144,7 @@ class RequestedPromptScenarios(unittest.TestCase):
         )
 
         result = conversation.ask(
-            "Schedule a task at an occupied time", thread_id="occupied-time"
+            "Schedule a task at an occupied time for 1 hour", thread_id="occupied-time"
         )
 
         self.assertIn("conflicts with Existing meeting", result["response"])

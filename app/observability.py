@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
@@ -84,6 +85,9 @@ def _build_logger() -> logging.Logger:
 
 def log_workflow(event: str, **fields: Any) -> None:
     """Append one machine-readable and secret-safe workflow event."""
+    if os.getenv('LOG_PRIVATE_CONTENT', 'true').lower() == 'false':
+        fields = {key:value for key,value in fields.items() if key in {
+            'thread_id','intent','graph_node','selected_tool','resulting_intent','has_error','duration_ms'}}
     payload = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "event": event,

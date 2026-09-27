@@ -294,7 +294,7 @@ class AdvancedAgentTests(unittest.TestCase):
         )
 
         conflict = conversation.ask(
-            "Schedule ML revision tomorrow at 3 PM", thread_id="conflict"
+            "Schedule ML revision tomorrow at 3 PM for 1 hour", thread_id="conflict"
         )
 
         self.assertIn("conflicts with Project Meeting", conflict["response"])
