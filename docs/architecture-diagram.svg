@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1900 1160" width="1900" height="1160" role="img" aria-label="Task-Pilot architecture: five layers from interface down to domain. Requests enter through Streamlit and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1900 1160" width="1900" height="1160" role="img" aria-label="Task-Pilot architecture: five layers from interface down to domain. Requests enter through the React or Streamlit client and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.">
 <defs>
 <marker id="a-mut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#5C6562"/></marker>
 <marker id="a-pine" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse"><path d="M 0 1 L 9 5 L 0 9 z" fill="#1F6F5C"/></marker>
@@ -36,7 +36,7 @@
 <rect x="210" y="155" width="120" height="64" rx="6" fill="#FFFFFF" stroke="#8C948F" stroke-width="1" stroke-dasharray="4 3"/>
 <text x="270.0" y="192.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">User</text>
 <rect x="380" y="155" width="280" height="64" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
-<text x="520.0" y="184.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">Streamlit UI</text>
+<text x="520.0" y="184.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">React / Streamlit UI</text>
 <text x="520.0" y="203.0" font-family="'IBM Plex Mono','DejaVu Sans Mono',monospace" font-size="10.5" fill="#5C6562" font-weight="400" text-anchor="middle">chat · preview · approve</text>
 <rect x="710" y="155" width="420" height="64" rx="6" fill="#FFFFFF" stroke="#CDD2CC" stroke-width="1"/>
 <text x="920.0" y="184.0" font-family="Archivo,'Liberation Sans',Arial,Helvetica,sans-serif" font-size="14" fill="#1A201E" font-weight="600" text-anchor="middle">FastAPI</text>

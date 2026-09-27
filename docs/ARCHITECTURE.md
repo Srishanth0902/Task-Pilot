@@ -4,7 +4,7 @@ Target architecture for the agentic calendar assistant. It describes the end
 state and the layer boundaries that get there. The six-week build has now
 shipped in a flat `app/` package; §19 maps those modules onto the layers below.
 
-![Task-Pilot architecture: five layers from interface down to domain. Requests enter through Streamlit and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.](architecture-diagram.svg)
+![Task-Pilot architecture: five layers from interface down to domain. Requests enter through the React or Streamlit client and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.](architecture-diagram.svg)
 
 The clay path is the write path. Everything else is a read or a proposal.
 Regenerate the figure with `python docs/diagram/generate.py` and
@@ -61,7 +61,7 @@ demoed.
 
 ```mermaid
 flowchart LR
-    U["User"] --> UI["Streamlit UI"]
+    U["User"] --> UI["React / Streamlit UI"]
     UI -->|"HTTP / JSON"| API["FastAPI"]
     API --> GRAPH["LangGraph agent"]
     GRAPH <--> LLM["LLM<br/>intent + extraction + phrasing"]
@@ -90,7 +90,7 @@ never the reverse.**
 
 ```mermaid
 flowchart TB
-    subgraph L5["Interface — FastAPI · Streamlit · CLI"]
+    subgraph L5["Interface — FastAPI · React · Streamlit · CLI"]
         direction LR
         I1[" "]
     end
@@ -385,17 +385,24 @@ and deployment need genuinely different ones:
 | Strategy | When | Mechanism |
 |----------|------|-----------|
 | `InstalledAppFlow` | local dev (today) | `run_local_server(port=0)`, token cached to `token.json` |
-| `WebFlow` | deployed (Week 6) | Web-application OAuth client, `/auth/callback` route, token in a `TokenStore` |
+| `WebFlow` | deployed (shipped) | Web-application OAuth client, `/api/auth/callback` route, token in a `TokenStore` |
 
 This matters more than it looks. The current README's troubleshooting section
 already notes that `run_local_server()` cannot work on a headless machine — so
 the moment the app is deployed, a desktop OAuth client stops being viable.
 The seam costs nothing to put in early; discovered at deployment it costs a
-rewrite of the auth path. The shipped code still uses `InstalledAppFlow`, so
-this one is outstanding rather than settled.
+rewrite of the auth path.
 
-`TokenStore` is likewise a small port: `FileTokenStore` today, an encrypted
-per-user row later, without touching any calling code.
+**This one has since landed, and it landed as two modules rather than one
+strategy behind `google_auth.py`.** `app/multiuser.py` builds the web flow
+directly — `Flow.from_client_config(...)` against a registered
+`/api/auth/callback`, the redirect URI `app/deployment_check.py` refuses to
+start without — and a `UserRuntime` that builds a calendar service per user
+from that user's stored credentials, so one process serves many signed-in
+users. `app/user_store.py` is the `TokenStore`: Fernet-encrypted per-user rows,
+with the key generated on first run. `InstalledAppFlow` remains the local path. So the prediction in this section held — a deployed app did need
+a web client, and the desktop flow did stop being viable — while the placement
+differs: the two flows sit in separate modules, not behind one interface.
 
 ---
 
@@ -779,7 +786,8 @@ is designed so streaming adds token deltas without changing the final payload.
 
 ## 13. UI layer
 
-Streamlit first, per the plan, in `ui/streamlit_app.py`. One hard rule:
+Streamlit first, per the plan — shipped as `streamlit_app.py` at the repo root
+rather than under `ui/`. One hard rule:
 **the UI is an HTTP client with zero business logic.** It never imports `app.*`.
 It renders chat history, a plan-preview table with Approve/Cancel buttons, an
 event list, and a loading state.
@@ -789,6 +797,12 @@ That rule is the entire React migration plan. Because the UI only consumes the
 with no changes below it. If the Streamlit app is allowed to import services
 directly — which is very easy to do and always tempting on Day 3 of Week 5 —
 that migration becomes a rewrite of the application.
+
+**That migration has since happened, and the rule held.** `frontend/` is a Vite
++ React workspace whose only contact with the backend is
+`frontend/src/api.ts` — a single `fetch('/api' + path)` helper. Nothing below
+the interface layer changed to accommodate it, and the Streamlit app still runs
+alongside it against the same contract.
 
 ---
 
@@ -938,7 +952,7 @@ plan the user has been shown and has approved.
 
 ```mermaid
 flowchart LR
-    B["Browser"] --> S["Streamlit :8501"]
+    B["Browser"] --> S["React / Streamlit"]
     S --> F["FastAPI :8000<br/>uvicorn"]
     F --> DB[("Postgres<br/>checkpoints + journal")]
     F --> G["Google Calendar API"]
@@ -952,6 +966,12 @@ The one deployment-specific piece of work is auth: the deployed app must use a
 **Web application** OAuth client with a registered redirect URI, not the desktop
 client used locally. That is exactly the `WebFlow` strategy from §6.3, which is
 why the seam is created in Week 3 rather than discovered in Week 6.
+
+That work has since shipped, along with the surrounding deployment: web OAuth
+and encrypted per-user sessions (`app/multiuser.py`, `app/user_store.py`,
+documented in `docs/MULTIUSER.md`), a production compose file, reverse-proxy
+configs for both Caddy and nginx, and `app/deployment_check.py` as the
+readiness probe behind `GET /health/ready`.
 
 ---
 
@@ -976,6 +996,11 @@ the shipped modules onto those seams.
 | `app/llm.py`, `app/observability.py` | `agent/llm.py`, `observability/` |
 | `app/evaluation.py`, `evaluation/queries.json` | `evals/` |
 | `app/config.py` module globals | `Settings` object injected via `deps.py` |
+| `app/multiuser.py` → web OAuth routes, `UserRuntime` | `api/auth.py` + `providers/web_auth.py` |
+| `app/user_store.py` → Fernet-encrypted per-user rows | `providers/token_store.py` implementing `TokenStore` |
+| `app/rescheduling.py`, `app/multi_event.py` | `services/` alongside `availability.py` and `bulk.py` |
+| `app/deployment_check.py` | `observability/readiness.py` |
+| `frontend/` (Vite + React) | `interface/web/` — already a pure HTTP client |
 
 Week by week, what actually landed:
 
@@ -987,6 +1012,7 @@ Week by week, what actually landed:
 | 4 ✅ | `scheduling.py` — conflict detection, free-slot search, bulk plans, confirmation gate | services (informal) |
 | 5 ✅ | `api.py` (FastAPI), `streamlit_app.py`, the test suite | interface |
 | 6 ✅ | `evaluation.py` + 45-query dataset, `observability.py`, Docker Compose, CI, docs | cross-cutting |
+| after ✅ | web OAuth + encrypted per-user sessions (`multiuser.py`, `user_store.py`), React workspace (`frontend/`), rescheduling and multi-event services, production compose and reverse-proxy configs | interface · providers · services |
 
 **The `CalendarPort` was never extracted.** The tools call `calendar_service`
 directly, and offline testing was solved a different way: the tests fake the
@@ -1002,6 +1028,14 @@ its error envelope in test code. A second calendar backend, or a change on
 Google's side, is felt in the tests as well as the adapter. Extracting the port
 now is the same mechanical change §6.1 describes — it is simply a refactor of
 working code rather than a foundation, and should be judged on that basis.
+
+Two of its other predictions did hold, and are worth recording next to the one
+that didn't. The auth seam (§6.3) was called outstanding and has since been
+built, because a deployed app really could not keep using a desktop OAuth
+client. And the rule that the UI must be a pure HTTP client (§13, decision 10)
+was what made `frontend/` a one-directory addition: the React workspace reaches
+the backend only through `fetch('/api' + path)`, and nothing below the interface
+layer moved to let it in.
 
 The rest of this document stands as the target: a reference for where the
 seams go if and when this codebase is grown past a six-week build.
@@ -1021,7 +1055,7 @@ seams go if and when this codebase is grown past a six-week build.
 | 7 | `awaiting` as explicit state | Follow-up turns are interpreted as slot fills, not new requests | Inferring context from message history alone — brittle and untestable |
 | 8 | LangGraph `interrupt()` + checkpointer for confirmation | Pause survives HTTP boundaries, restarts, and multiple workers | Holding pending plans in server memory — breaks on restart and behind >1 worker |
 | 9 | Etag / `If-Match` on every write | Never silently overwrite a change made elsewhere | Blind writes — data loss that is invisible to both user and logs |
-| 10 | UI is a pure HTTP client | React migration is a one-directory rewrite | Streamlit importing services — locks the UI choice in permanently |
+| 10 | UI is a pure HTTP client | React migration is a one-directory rewrite — since borne out by `frontend/` | Streamlit importing services — locks the UI choice in permanently |
 | 11 | Evals seed a fake calendar per case | Deterministic, safe, fast; asserts effects rather than prose | Evaluating against a real calendar — slow, mutating, unrepeatable |
 | 12 | Layer contract enforced by `import-linter` | Boundaries decay silently under deadline pressure | Documentation alone |
 

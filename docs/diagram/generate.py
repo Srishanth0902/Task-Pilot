@@ -56,7 +56,8 @@ def arrow(x1, y1, x2, y2, color=MUTED, sw=1.6, marker="a-mut", dash=None):
 add(f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
     f'width="{W}" height="{H}" role="img" '
     f'aria-label="Task-Pilot architecture: five layers from interface down to domain. '
-    f'Requests enter through Streamlit and FastAPI, run through a LangGraph node chain, '
+    f'Requests enter through the React or Streamlit client and FastAPI, run through a '
+    f'LangGraph node chain, '
     f'call read or plan tools, and every write passes a confirmation gate and the single '
     f'EventService.apply function before reaching the CalendarPort and its Google or fake adapter.">')
 add('<defs>')
@@ -125,7 +126,7 @@ def box(x, y, w, h, title, sub=None, fill=CARD, stroke=LINE, sw=1,
 # ---------------------------------------------------------------- L5
 y5 = 155
 box(210, y5, 120, 64, "User", None, CARD, FAINT, 1, INK, 14, dash="4 3")
-box(380, y5, 280, 64, "Streamlit UI", "chat · preview · approve", CARD, LINE)
+box(380, y5, 280, 64, "React / Streamlit UI", "chat · preview · approve", CARD, LINE)
 box(710, y5, 420, 64, "FastAPI", "POST /chat · /chat/confirm · GET /events")
 box(1180, y5, 418, 64, "deps.py — composition root",
     "settings · clock · adapter · services · graph", CARD, LINE, 1, INK, 13)

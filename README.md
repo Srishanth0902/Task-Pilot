@@ -92,7 +92,7 @@ its seams made explicit — layer boundaries, the LangGraph state machine, the
 safety model for calendar mutations, and a map (§19) from the shipped modules
 above onto those layers.
 
-![Task-Pilot architecture: five layers from interface down to domain. Requests enter through Streamlit and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.](docs/architecture-diagram.png)
+![Task-Pilot architecture: five layers from interface down to domain. Requests enter through the React or Streamlit client and FastAPI, run through a LangGraph node chain, call read or plan tools, and every write passes a confirmation gate and the single EventService.apply function before reaching the CalendarPort and its Google or fake adapter.](docs/architecture-diagram.png)
 
 The four decisions that shape everything else:
 
