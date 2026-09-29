@@ -341,6 +341,14 @@ harness — all before anything touches a calendar. Every safety feature in
 Section 10 is a property of this object rather than a check scattered across
 call sites.
 
+One domain type arrived later than this list and belongs in it.
+`app/preferences.py`'s `SchedulingPreferences` is a validated value object —
+working hours, break minutes, a preferred study start, protected event titles,
+a preview-always flag — loaded per account and injected into the graph factory
+the way this section injects `Clock`. It is pure data plus pure functions over
+that data (`window()`, `protected()`, `busy_events()`), with no network and no
+LLM, so it belongs at this layer rather than in services. §19 maps it here.
+
 ---
 
 ## 6. Provider layer: ports and adapters
@@ -465,6 +473,18 @@ enforce etag checks, one place to write the journal, and one place the
 confirmation gate has to guard. It also means a model hallucinating a tool call
 cannot delete anything — the worst it can do is propose a plan the user is then
 shown and asked about.
+
+**This is the one invariant the shipped code has since broken, and it broke in
+the way the decision record predicted it would.** `app/undo.py` writes to Google
+directly — `service.events().delete(...)` to undo a create,
+`service.events().patch(...)` to undo a time move — and it is reached from
+`CalendarConversation.ask` before the graph runs, not through the apply path. So
+there are two writers now. The cost landed precisely in decision 3's
+rejected-alternative column: *the gate must then be re-enforced N times*. Undo
+carries its own confirmation gate — its own `undo_pending` state, its own
+"Confirm undo? (yes/no)" prompt — and separately re-checks protected titles. The
+confirmation policy §10.2 wanted in one function now exists in two places, and a
+change to it has to be made in both.
 
 Tools return the domain result envelope rather than raising:
 
@@ -682,6 +702,14 @@ organiser — Google returns `412` and the operation aborts with
 optimistic concurrency for free, and it is only cheap because the plan already
 carries the etags.
 
+`If-Match` did ship — in exactly one place, and not this one. `app/undo.py` is
+the only conditional write in the codebase: it re-reads the event, compares its
+etag against the one captured when the change was made, compares the visible
+fields too, and only then writes with `If-Match` set. The main apply path still
+writes blind. `calendar_service.py` reads the etag into its result dicts and
+nothing ever sends it back. So decision 9 holds where the riskiest operation
+needed it, and is unimplemented everywhere else.
+
 ### 10.4 Journal and undo
 
 `apply()` appends before/after snapshots to `services/journal.py`, keyed by
@@ -690,6 +718,20 @@ carries the etags.
 needing new infrastructure. Events created by the agent are additionally tagged
 via Google's `extendedProperties.private` (`taskpilot_plan_id`), so agent
 activity is distinguishable from the user's own edits after the fact.
+
+Undo has since shipped, and the before/after snapshot was the right shape: the
+record is `{'kind', 'before', 'after'}`, carried as `undo_record` on the
+checkpointed `AgentState`. The journal did not ship. There is no
+`services/journal.py`, so that record is per-conversation and holds only the
+most recent change — *"Undo supports the latest single event creation or time
+move"* is what the agent tells you — rather than an audit trail keyed by
+`plan_id` and `trace_id`. Agent-created events are not tagged with
+`extendedProperties.private` either, so agent activity is still not
+distinguishable from the user's own edits after the fact. And the claim this
+section makes most confidently — that undo would be an inversion of a journal
+entry *rather than a feature needing new infrastructure* — is the part that did
+not hold. It arrived as a module, a second confirmation flow, and a second write
+path (§8).
 
 ---
 
@@ -1001,6 +1043,8 @@ the shipped modules onto those seams.
 | `app/rescheduling.py`, `app/multi_event.py` | `services/` alongside `availability.py` and `bulk.py` |
 | `app/deployment_check.py` | `observability/readiness.py` |
 | `frontend/` (Vite + React) | `interface/web/` — already a pure HTTP client |
+| `app/preferences.py` → `SchedulingPreferences` | `domain/preferences.py` — a validated value object, injected like `Clock` (§5) |
+| `app/undo.py` | `services/journal.py` + an inverted `MutationPlan` back through `apply_plan` (§10.4) |
 
 Week by week, what actually landed:
 
@@ -1013,6 +1057,7 @@ Week by week, what actually landed:
 | 5 ✅ | `api.py` (FastAPI), `streamlit_app.py`, the test suite | interface |
 | 6 ✅ | `evaluation.py` + 45-query dataset, `observability.py`, Docker Compose, CI, docs | cross-cutting |
 | after ✅ | web OAuth + encrypted per-user sessions (`multiuser.py`, `user_store.py`), React workspace (`frontend/`), rescheduling and multi-event services, production compose and reverse-proxy configs | interface · providers · services |
+| after ✅ | per-account scheduling preferences (`preferences.py`), single-step undo (`undo.py`), frontend redesign and conversation-workflow fixes | domain · services · interface |
 
 **The `CalendarPort` was never extracted.** The tools call `calendar_service`
 directly, and offline testing was solved a different way: the tests fake the
@@ -1037,6 +1082,17 @@ was what made `frontend/` a one-directory addition: the React workspace reaches
 the backend only through `fetch('/api' + path)`, and nothing below the interface
 layer moved to let it in.
 
+`main`'s latest work settled two more of them, and this time the document does
+not come out ahead. `app/undo.py` broke the single-writer invariant (§8) — and
+in doing so demonstrated the exact cost decision 3 named for multiple writers,
+by having to re-implement the confirmation gate a second time. Alongside that,
+`If-Match` finally appeared, but only inside `undo.py` (§10.3), which is to say
+the codebase reached for optimistic concurrency at precisely the point this
+document said it would matter, and still writes blind everywhere else. Read
+together, those two are one result rather than two: the write path that skipped
+the shared apply seam is also the write path that had to rebuild, locally and
+partially, the guarantees the seam was there to provide.
+
 The rest of this document stands as the target: a reference for where the
 seams go if and when this codebase is grown past a six-week build.
 
@@ -1048,13 +1104,13 @@ seams go if and when this codebase is grown past a six-week build.
 |---|----------|-----|---------------------|
 | 1 | Ports & adapters for the calendar | Offline, deterministic tests and evals; a second provider is one file | Calling `googleapiclient` from tools — untestable without network, and unevaluatable |
 | 2 | `MutationPlan` as an inert value | Preview, confirm, log, test, and score all operate on one object | Tools that mutate directly — no preview, no audit point, no safety gate |
-| 3 | Exactly one writing tool | One audit point, one etag guard, one confirmation gate; hallucinated calls cannot destroy data | A write tool per operation — the gate must then be re-enforced N times |
+| 3 | Exactly one writing tool | One audit point, one etag guard, one confirmation gate; hallucinated calls cannot destroy data | A write tool per operation — the gate must then be re-enforced N times, as `undo.py` since had to (§8) |
 | 4 | Deterministic time resolution | Models miscompute dates; interval math must be exact | Letting the LLM emit ISO timestamps — the most common failure mode in this genre |
 | 5 | `Clock` injected as a port | Reproducible runs; no date-boundary flakes | `datetime.now()` inline — untestable, and evals stop being replayable |
 | 6 | Services never import LangChain | Logic stays usable from REST, CLI, and tests with no LLM | Logic inside tool bodies — forces an LLM into every test |
 | 7 | `awaiting` as explicit state | Follow-up turns are interpreted as slot fills, not new requests | Inferring context from message history alone — brittle and untestable |
 | 8 | LangGraph `interrupt()` + checkpointer for confirmation | Pause survives HTTP boundaries, restarts, and multiple workers | Holding pending plans in server memory — breaks on restart and behind >1 worker |
-| 9 | Etag / `If-Match` on every write | Never silently overwrite a change made elsewhere | Blind writes — data loss that is invisible to both user and logs |
+| 9 | Etag / `If-Match` on every write | Never silently overwrite a change made elsewhere — shipped in `undo.py` alone (§10.3) | Blind writes — data loss that is invisible to both user and logs |
 | 10 | UI is a pure HTTP client | React migration is a one-directory rewrite — since borne out by `frontend/` | Streamlit importing services — locks the UI choice in permanently |
 | 11 | Evals seed a fake calendar per case | Deterministic, safe, fast; asserts effects rather than prose | Evaluating against a real calendar — slow, mutating, unrepeatable |
 | 12 | Layer contract enforced by `import-linter` | Boundaries decay silently under deadline pressure | Documentation alone |
