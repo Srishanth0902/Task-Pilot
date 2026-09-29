@@ -93,7 +93,7 @@ def format_local_range(start: datetime | str | None, end: datetime | str | None)
     start_clock = f"{start_hour}:{local_start:%M %p}"
     end_clock = f"{end_hour}:{local_end:%M %p}"
     if local_start.date() == local_end.date():
-        return f"{local_start.strftime('%A, %d %B %Y')}, {start_clock}–{end_clock} IST"
+        return f"{local_start.strftime('%A, %d %B %Y')}, {start_clock} to {end_clock} IST"
     return f"{format_local_datetime(local_start)} to {format_local_datetime(local_end)}"
 
 

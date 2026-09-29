@@ -21,6 +21,7 @@ from app.date_utils import coerce_datetime
 from app.graph_agent import CalendarConversation
 from app.llm import create_openrouter_model
 from app.user_store import UserStore
+from app.preferences import SchedulingPreferences
 
 COOKIE = 'task_pilot_session'
 SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/calendar']
@@ -70,7 +71,7 @@ class UserRuntime:
             self.store.name_conversation(user_id, thread_id, message)
             service = self.service(user_id)
             try:
-                chat = CalendarConversation(self.model_factory(), service)
+                chat = CalendarConversation(self.model_factory(), service, preferences=self.store.preferences(user_id))
                 if saved:
                     saved['messages'] = messages_from_dict(saved.get('messages', []))
                     chat.graph.update_state({'configurable': {'thread_id': thread_id}}, saved)
@@ -223,6 +224,14 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
     @app.get('/conversations')
     def conversations(user_id=Depends(current_user)):
         return store.conversations(user_id)
+
+    @app.get('/preferences')
+    def preferences(user_id=Depends(current_user)):
+        return store.preferences(user_id)
+
+    @app.put('/preferences')
+    def save_preferences(body: SchedulingPreferences, user_id=Depends(current_user)):
+        return store.save_preferences(user_id, body.model_dump())
 
     @app.get('/conversations/{thread_id}')
     def history(thread_id: str, user_id=Depends(current_user)):

@@ -25,6 +25,9 @@ export interface ChatResponse {
   response: string;
   intent?: string;
   requires_confirmation: boolean;
+  can_undo?: boolean;
+  paused_task?: string | null;
+  task_context?: {intent?:string;title?:string;start_time?:string;duration_minutes?:number;awaiting_duration?:boolean};
   events: CalendarEvent[];
   conflicts: CalendarEvent[];
   alternatives: Slot[];
@@ -51,7 +54,9 @@ export async function request<T>(
     throw new Error(
       typeof body?.detail === "string"
         ? body.detail
-        : "Could not reach your calendar. Please try again.",
+        : Array.isArray(body?.detail) && typeof body.detail[0]?.msg === 'string'
+          ? body.detail[0].msg.replace(/^Value error, /, '')
+          : "Could not reach your calendar. Please try again.",
     );
   return body as T;
 }
@@ -92,7 +97,7 @@ export function range(start?: string, end?: string): string {
   if (!start) return "";
   if (!start.includes("T")) return "All day";
   const endDate = end && dateKey(new Date(start)) !== dateKey(new Date(end)) ? ` (${dayLabel(end)})` : "";
-  return `${clock(start)}${end ? " – " + clock(end) + endDate : ""} IST`;
+  return `${clock(start)}${end ? " to " + clock(end) + endDate : ""} IST`;
 }
 export function safeLink(url?: string): string | undefined {
   try {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { PreferencesForm } from './Preferences';
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUp,
@@ -41,12 +42,19 @@ type UserAccount = {id:string;name:string;email:string;picture?:string|null};
 export default function App() {
   const client = useQueryClient();
   const auth = useQuery({queryKey: ['auth'], queryFn: () => request<{authenticated:boolean; login_configured:boolean; user:UserAccount|null}>('/auth/me'), retry:false});
-  if (!auth.data?.authenticated || !auth.data.user) return <main style={{maxWidth:520,margin:'12vh auto',padding:32}}>
-    <CalendarDays size={32}/><h1>Task Pilot</h1><p>Your calendar, with a little more room for what matters.</p>
-    {auth.isPending ? <p>Loading your account…</p> : auth.isError ? <p>Could not connect. <button onClick={()=>auth.refetch()}>Try again</button></p> : <>
-      <p>Sign in to manage your Google Calendar and continue your saved conversations.</p>
-      {auth.data?.login_configured ? <a href="/api/auth/login">Choose a Google account</a> : <p>Google sign-in is being configured. Please check back shortly.</p>}
-    </>}
+  if (!auth.data?.authenticated || !auth.data.user) return <main className="auth-shell">
+    <section className="auth-card">
+      <span className="auth-mark"><CalendarDays size={24}/></span>
+      <div>
+        <h1>Task Pilot</h1>
+        <p className="auth-summary">Plan, move, and protect time on your Google Calendar.</p>
+      </div>
+      {auth.isPending ? <div className="auth-status" role="status">Loading your account…</div> : auth.isError ? <div className="auth-status error" role="alert">Could not connect. <button className="text-button" onClick={()=>auth.refetch()}>Try again</button></div> : <>
+        <p>Sign in to manage your calendar and continue your saved conversations.</p>
+        {auth.data?.login_configured ? <a className="auth-action" href="/api/auth/login"><UserRound size={17}/> Continue with Google</a> : <div className="auth-status">Google sign-in is being configured. Please check back shortly.</div>}
+      </>}
+      <small>Your calendar data stays connected to the Google account you choose.</small>
+    </section>
   </main>;
   const endSession = async (next: string) => {
     await request('/auth/logout',{method:'POST'});
@@ -266,16 +274,14 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
             <span className={`status-dot ${events.isSuccess ? "connected" : ""}`}/>
             <span>
               {events.isSuccess ? "Calendar connected" : events.isError ? "Calendar unavailable" : "Connecting to calendar"}
-              <small>Google Calendar · IST</small>
+              <small>Google Calendar / IST</small>
             </span>
           </div>
         </div>
       </aside>
       <header className="topbar">
-        <span className="eyebrow">WORKSPACE</span>
-        <span className="slash">/</span>
-        <span>Your daily ledger</span>
-        <span className="timezone">IST · India Standard Time</span>
+        <strong>Calendar workspace</strong>
+        <span className="timezone">India Standard Time</span>
         <div className="profile-menu" ref={profileMenu}>
           <button className="profile-button" aria-label={`Google account: ${user.email}`} aria-expanded={profileOpen} onClick={()=>setProfileOpen(open=>!open)}>
             {profilePicture ? <img src={profilePicture} alt="" referrerPolicy="no-referrer"/> : <span>{profileInitial}</span>}
@@ -300,9 +306,9 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
         <section className="schedule-pane" aria-label="Schedule">
           {page === "settings" ? (
             <div className="settings">
-              <span className="eyebrow">PREFERENCES</span>
-              <h1>A little housekeeping.</h1>
-              <p>Your calendar, on your terms.</p>
+              <h1>Settings</h1>
+              <p>Control how Task Pilot schedules events and protects your time.</p>
+              <PreferencesForm />
               <div className="setting-row">
                 <span>Display timezone</span>
                 <strong>India Standard Time (IST)</strong>
@@ -404,7 +410,7 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
               </div>
               <div className="date-heading">
                 <div className="heading-kicker">
-                  <span className="tag">SCHEDULE MANIFEST</span>
+                  <span className="tag">{view === "week" ? "Week view" : "Day view"}</span>
                   <span>
                     {new Intl.DateTimeFormat("en-GB", {
                       month: "long",
@@ -417,15 +423,15 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                   {heading && (
                     <>
                       {heading}
-                      <span className="heading-dot"> · </span>
+                      <span className="heading-dot"> / </span>
                     </>
                   )}
                   {dayLabel(day)}
                 </h1>
                 <p>
                   {view === "week"
-                    ? "Seven days, starting here."
-                    : "A little structure. A little breathing room."}{" "}
+                    ? "Events for the next seven days."
+                    : "Events and open time for this date."}{" "}
                   <span>All times in IST.</span>
                 </p>
               </div>
@@ -436,7 +442,7 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                   <span>
                     {rows.length} {rows.length === 1 ? "event" : "events"}
                     {totalMinutes > 0
-                      ? ` · ${+(totalMinutes / 60).toFixed(1)} hrs`
+                      ? ` / ${+(totalMinutes / 60).toFixed(1)} hrs`
                       : ""}
                     <button
                       className="icon-button"
@@ -469,7 +475,7 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                 ) : rows.length === 0 ? (
                   <div className="empty">
                     <CalendarDays size={30} strokeWidth={1} />
-                    <h2>A little room in your day.</h2>
+                    <h2>No events scheduled</h2>
                     <p>
                       No events{" "}
                       {view === "week" ? "in these seven days" : "on this date"}
@@ -563,8 +569,8 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                 )}
                 <footer className="ledger-footer">
                   <span className="status-dot connected" />
-                  <span>Make space for what comes next.</span>
-                  <span>YOUR TIME, WELL SPENT</span>
+                  <span>Your schedule is shown in India Standard Time.</span>
+                  <span>Task Pilot</span>
                 </footer>
               </div>
             </>
@@ -598,30 +604,41 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
               <RefreshCw size={15} />
             </button>
           </div>
+          <div className="mobile-conversations" aria-label="Recent conversations">
+            <button className="mobile-new-chat" disabled={busy} onClick={newChat}>
+              <Plus size={14}/> New
+            </button>
+            {conversations.data?.slice(0, 5).map((conversation) => (
+              <button
+                key={conversation.id}
+                className={conversation.id === thread ? "active" : ""}
+                disabled={busy}
+                onClick={() => void openConversation(conversation.id)}
+                title={conversation.title}
+              >
+                {conversation.title}
+              </button>
+            ))}
+          </div>
           <div className="conversation">
             <div className="conversation-date">{dayLabel(dateKey())}</div>
             {messages.length === 0 && (
               <div className="chat-welcome">
-                <span className="eyebrow">A CLEARER DAY STARTS HERE</span>
-                <h2>What’s on your mind?</h2>
-                <p>
-                  A meeting to move, an hour to find.
-                  <br />
-                  Tell me what you need to make room for.
-                </p>
+                <h2>Plan your calendar</h2>
+                <p>Create an event, move a meeting, or find an open time.</p>
                 <button
                   onClick={() =>
                     setDraft("What slots are available tomorrow after 6 PM?")
                   }
                 >
-                  Find some breathing room <ArrowRight size={14} />
+                  Find available time <ArrowRight size={14} />
                 </button>
               </div>
             )}
             {messages.map((message, index) => (
               <div className={`message ${message.role}`} key={index}>
                 {message.role === "assistant" && (
-                  <span className="eyebrow message-label">TASK PILOT</span>
+                  <span className="message-label">Task Pilot</span>
                 )}
                 <p>{message.text}</p>
                 {message.payload?.alternatives?.length ? (
@@ -649,8 +666,8 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                 ) : null}
                 {message.payload?.proposed_changes?.length ? (
                   <div className="changes">
-                    <span className="eyebrow">
-                      PROPOSED CHANGES ·{" "}
+                    <span className="change-label">
+                      Proposed changes /{" "}
                       {message.payload.proposed_changes.length}
                     </span>
                     {message.payload.proposed_changes.map((change, i) => (
@@ -659,14 +676,14 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                         <small>
                           {change.old_start && (
                             <>
-                              {dayLabel(change.old_start)} ·{" "}
+                              {dayLabel(change.old_start)} /{" "}
                               {range(change.old_start, change.old_end)}
                               <br />
                             </>
                           )}
                           {change.new_start ? (
                             <>
-                              → {dayLabel(change.new_start)} ·{" "}
+                              To {dayLabel(change.new_start)} /{" "}
                               {range(change.new_start, change.new_end)}
                             </>
                           ) : change.action === "delete" ? (
@@ -700,6 +717,19 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
             <div ref={bottom} />
           </div>
           <div className="composer-area">
+            {messages.at(-1)?.payload?.paused_task && !pending && (
+              <button className="outline" disabled={busy} onClick={()=>send('resume previous task')}>Resume {messages.at(-1)?.payload?.paused_task}</button>
+            )}
+            {messages.at(-1)?.payload?.task_context && (
+              <div className="task-context" aria-label="Current task">
+                <strong>{messages.at(-1)?.payload?.task_context?.title || 'Unfinished calendar request'}</strong>
+                <span>{messages.at(-1)?.payload?.task_context?.start_time && `${dayLabel(messages.at(-1)!.payload!.task_context!.start_time!)} / ${clock(messages.at(-1)!.payload!.task_context!.start_time!)} IST`}</span>
+                {messages.at(-1)?.payload?.task_context?.awaiting_duration && <small>Waiting for duration</small>}
+              </div>
+            )}
+            {messages.at(-1)?.payload?.can_undo && !pending && (
+              <button className="outline" disabled={busy} onClick={()=>send('undo last change')}>Undo last change</button>
+            )}
             {error && (
               <div className="send-error" role="alert">
                 {error}
@@ -789,7 +819,7 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
             </form>
             <div className="composer-footer">
               <span>All times in IST</span>
-              <span>Enter to send · Shift + Enter for a new line</span>
+              <span>Enter to send / Shift + Enter for a new line</span>
             </div>
           </div>
         </section>
@@ -818,7 +848,6 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
               send(text);
             }}
           >
-            <span className="eyebrow">MAKE A LITTLE SPACE</span>
             <h2>Add an event</h2>
             <p>The assistant will check for conflicts before creating it.</p>
             <label>
@@ -847,7 +876,7 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                 />
               </label>
               <label>
-                Time · IST
+                Time (IST)
                 <input
                   type="time"
                   required
@@ -889,7 +918,7 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
         )}
         {detail && (
           <div>
-            <span className="eyebrow">YOUR CALENDAR</span>
+            <span className="dialog-label">Calendar event</span>
             <h2>{detail.title}</h2>
             <p>{dayLabel(detail.start)}</p>
             <p>

@@ -46,7 +46,7 @@ test("renders reference layout and readable IST times", async ({ page }) => {
   await expect(page.getByText("7:00 AM", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Next day", exact: true }).click();
   await page.getByRole("button", { name: "Week", exact: true }).click();
-  await expect(page.getByText("Seven days, starting here.")).toBeVisible();
+  await expect(page.getByText("Events for the next seven days.")).toBeVisible();
   await page.getByRole("button", { name: "Agenda", exact: true }).click();
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.screenshot({
@@ -100,7 +100,7 @@ test("add-event form submits the reviewed IST date and duration", async ({page})
   await page.getByRole('button',{name:'Add event',exact:true}).click();
   await page.getByLabel('Event title').fill('Interview practice');
   await page.getByLabel('Date',{exact:true}).fill('2026-09-13');
-  await page.getByLabel('Time · IST').fill('18:30');
+  await page.getByLabel('Time (IST)').fill('18:30');
   await page.getByLabel('Duration in minutes').fill('45');
   await page.getByRole('button',{name:'Create event',exact:true}).click();
   await expect(page.getByText('Event created.',{exact:true})).toBeVisible();
@@ -136,7 +136,7 @@ test("slot selection opens review without sending a mutation", async ({
   await page.getByLabel("Send message").click();
   await page.getByRole("button", { name: "Select slot" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByLabel("Time · IST")).toHaveValue("18:00");
+  await expect(page.getByLabel("Time (IST)")).toHaveValue("18:00");
   expect(calls).toBe(1);
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).not.toBeVisible();
@@ -149,7 +149,14 @@ test("failed requests preserve input and mobile layout stays within viewport", a
     route.fulfill({ status: 503, json: { detail: "Connection interrupted" } }),
   );
   await page.goto("/");
+  await expect(page.getByRole("button", { name: "Schedule", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Conversations", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Settings", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Week", exact: true })).toBeVisible();
+  await expect(page.getByLabel("Choose date")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add event", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Conversations", exact: true }).click();
+  await expect(page.getByRole("button", { name: "New", exact: true })).toBeVisible();
   await page.getByLabel("Message your assistant").fill("Move my Yoga");
   await page.getByLabel("Send message").click();
   await expect(page.getByRole("alert")).toContainText("Connection interrupted");
