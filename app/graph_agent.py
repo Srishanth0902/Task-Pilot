@@ -33,6 +33,7 @@ from app.date_utils import (
 from app.observability import log_workflow, safe_error_detail
 from app.rescheduling import relocation_plan
 from app.multi_event import plan_moves
+from app.preferences import SchedulingPreferences
 from app.scheduling import (
     build_bulk_changes,
     day_window,
@@ -109,6 +110,10 @@ class CalendarAgentState(TypedDict, total=False):
     alternatives: list[dict]
     awaiting_confirmation: bool
     confirmation_status: Literal["pending", "approved", "declined"] | None
+    memory_summary: list[dict]
+    suspended_task: dict | None
+    undo_record: dict | None
+    undo_pending: bool
 
 
 def calendar_planner_prompt() -> str:
@@ -160,6 +165,11 @@ Rules:
   end_time empty; the graph will ask for it.
 - Prior pending state and candidates are included below. If this message answers
   that question, set continue_previous=true and preserve/complete that action.
+- Earlier event context contains compact facts about previous results. Use it
+  to resolve references, but events may have changed since those results.
+  For a pending task, preserve fields that the user did not explicitly change.
+  A correction such as "actually tomorrow" changes only the date. A duration
+  answer changes only the duration. Ask only for information still missing.
 - If candidates are shown and the user identifies one, copy its exact event_id.
 - Use bulk_update for requests affecting every matching event. Set search_query,
   time_min/time_max, and either shift_minutes or target_date (YYYY-MM-DD).
@@ -268,6 +278,11 @@ def _duration_minutes_from_text(text: str) -> int | None:
             rf"(?:about\s+)?{body}[.!]?", lowered
         )
 
+    if duration_match(r'(?:half\s+(?:an?\s+)?|a\s+half\s+)hours?'):
+        return 30
+    if duration_match(r'(?:a\s+)?quarter\s+(?:of\s+an?\s+)?hours?'):
+        return 15
+
     # Natural fractional forms frequently used as a duration-only follow-up:
     # "1 and half hour", "one and a half hours", and "an hour and a half".
     match = duration_match(
@@ -330,6 +345,16 @@ def _duration_minutes_from_text(text: str) -> int | None:
     return minutes
 
 
+def _duration_reply(text: str) -> int | None:
+    """Only short answers consisting of a length may bypass interpretation."""
+    text = re.sub(r'^(?:actually[, ]+|please\s+|make it\s+|for\s+)', '', text.strip(), flags=re.I)
+    text = re.sub(r'\s+please[.!]?$', '', text, flags=re.I)
+    allowed = set(_DURATION_WORDS) | {'about', 'and', 'half', 'quarter', 'of', 'hour', 'hours', 'hr', 'hrs', 'minute', 'minutes', 'min', 'mins'}
+    if any(word not in allowed for word in re.findall(r'[a-z]+',text.casefold())):
+        return None
+    return _duration_minutes_from_text(text)
+
+
 def _explicit_end_from_text(start: datetime, text: str) -> datetime | None:
     """Resolve an explicit 'until/end/from-to' clock relative to the start."""
     patterns = (
@@ -367,7 +392,7 @@ def _complete_create_duration(action: dict, query: str) -> None:
     """Require a user-supplied create duration and calculate its exact end."""
     if action.get("intent") != "create":
         return
-    minutes = _duration_minutes_from_text(query)
+    minutes = _duration_reply(query) or _duration_minutes_from_text(query)
     start = _plan_datetime(action["start_time"]) if action.get("start_time") else None
     explicit_end = _explicit_end_from_text(start, query) if start else None
     if minutes is not None:
@@ -436,7 +461,7 @@ def _requests_free_slot_scheduling(query: str) -> bool:
     )
 
 
-def _complete_free_slot_action(action: dict, query: str, *, continuing: bool = False) -> None:
+def _complete_free_slot_action(action: dict, query: str, *, continuing: bool = False, preferences=None) -> None:
     """Fill model-omitted free-slot details from explicit user language."""
     if action.get("intent") != "free_slot":
         return
@@ -458,8 +483,8 @@ def _complete_free_slot_action(action: dict, query: str, *, continuing: bool = F
         inferred = infer_local_time_window(
             range_query,
             now=local_now(),
-            start_hour=WORKDAY_START_HOUR,
-            end_hour=WORKDAY_END_HOUR,
+            start_hour=preferences.work_start if preferences else WORKDAY_START_HOUR,
+            end_hour=preferences.work_end if preferences else WORKDAY_END_HOUR,
         )
         if inferred:
             action["time_min"] = inferred[0].isoformat()
@@ -587,7 +612,7 @@ def _action_ready(action: dict) -> bool:
     return intent == "list"
 
 
-def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
+def create_calendar_graph(model, service, *, checkpointer=None, planner=None, preferences=None):
     """Compile the stateful Week 3/4 graph around an LLM and calendar service."""
     if model is None and planner is None:
         raise ValueError("A LangChain-compatible chat model must be supplied.")
@@ -596,6 +621,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         QueryPlan, method="function_calling", include_raw=True
     )
     tools = {tool.name: tool for tool in build_calendar_tools(service)}
+    preferences = SchedulingPreferences.model_validate(preferences or {})
 
     def invoke_tool(state: CalendarAgentState, tool_name: str, args: dict):
         context = {
@@ -648,7 +674,17 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         query = state["user_query"].strip()
         if not query:
             return {"error": "Calendar request cannot be empty."}
-        if state.get("awaiting_confirmation"):
+        pending = state.get('pending_action') or {}
+        if pending.get('title'):
+            resume = re.match(r'(?:okay[, ]+)?back to\s+(.+?)[,;—-]\s*(.+)$', query, re.I)
+            if resume and resume.group(1).casefold() == pending['title'].casefold():
+                query = resume.group(2).strip()
+        try:
+            revising = pending.get('intent') == 'create' and not pending.get('coordinated') and (
+                _duration_reply(query) is not None or bool(re.fullmatch(r'(?:actually[, ]+)?(?:make it\s+)?(?:today|tomorrow|\d{1,2}(?::\d{2})?\s*(?:am|pm))[.!]?',query,re.I)))
+        except ValueError:
+            revising = pending.get('intent') == 'create' and not pending.get('coordinated')
+        if state.get("awaiting_confirmation") and not revising:
             decision = _confirmation_value(query)
             if decision is None:
                 return {
@@ -675,16 +711,35 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             "candidate_events": state.get("candidate_events", []),
             "conflict_events": state.get("conflict_events", []),
             "alternatives": state.get("alternatives", []),
+            "earlier_event_context": state.get("memory_summary", []),
+            "preferences": preferences.model_dump(),
         }
         try:
+            correction = None
+            if previous and previous.get('intent') == 'create' and previous.get('start_time'):
+                day_reply = re.fullmatch(r'(?:actually[, ]+)?(?:make it\s+)?(today|tomorrow)[.!]?', query, re.I)
+                if day_reply:
+                    date = local_now().date() + timedelta(days=day_reply.group(1).lower() == 'tomorrow')
+                    start = _plan_datetime(previous['start_time'])
+                    correction = QueryPlan(intent='create', continue_previous=True, start_time=start.replace(year=date.year, month=date.month, day=date.day).isoformat())
+                period_reply = re.fullmatch(r'(am|pm)(?:[, ]+for\s+.+)?[.!]?',query,re.I)
+                clock_reply = re.fullmatch(r'(?:actually[, ]+)?(?:make it\s+)?(\d{1,2}(?::\d{2})?\s*(?:am|pm))[.!]?',query,re.I)
+                start = _plan_datetime(previous['start_time'])
+                if period_reply:
+                    hour = start.hour % 12 + (12 if period_reply.group(1).lower() == 'pm' else 0)
+                    correction = QueryPlan(intent='create',continue_previous=True,start_time=start.replace(hour=hour).isoformat())
+                elif clock_reply:
+                    clock = _clock_from_text(clock_reply.group(1))
+                    if clock:
+                        correction = QueryPlan(intent='create',continue_previous=True,start_time=start.replace(hour=clock[0],minute=clock[1]).isoformat())
             duration_followup = False
             if (
                 previous
                 and previous.get("intent") == "create"
-                and previous.get("awaiting_duration")
+                and (previous.get("awaiting_duration") or revising)
             ):
                 try:
-                    duration_followup = _duration_minutes_from_text(query) is not None
+                    duration_followup = _duration_reply(query) is not None
                 except ValueError:
                     # Preserve the pending action so the validation path can
                     # return the precise duration error below.
@@ -699,8 +754,10 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             # and every mutation retain the full interpretation/safety workflow.
             # A duration-only answer is deterministic and bypasses the model so
             # it cannot replace the already-confirmed title or start time.
-            quick_read = re.fullmatch(r"(?:show|list)(?: me)? (?:my )?(?:tasks|events)(?: for)? (today|tomorrow)[.!]?", query, re.I)
-            if duration_followup:
+            quick_read = re.fullmatch(r"(?:(?:show|list)(?: me)? (?:my )?(?:tasks|events)(?: for)?|what (?:tasks|events) do i have) (today|tomorrow)[?!.]?", query, re.I)
+            if correction:
+                raw = correction
+            elif duration_followup:
                 raw = QueryPlan(intent="create", continue_previous=True)
             elif quick_read and not previous:
                 reference = local_now() + timedelta(days=quick_read.group(1).lower() == "tomorrow")
@@ -795,7 +852,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 and previous.get("intent") == "create"
                 and previous.get("awaiting_duration")
                 and (
-                    _duration_minutes_from_text(query) is not None
+                    _duration_reply(query) is not None
                     or (
                         previous.get("start_time")
                         and _explicit_end_from_text(_plan_datetime(previous["start_time"]), query)
@@ -821,6 +878,12 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             action = _action_from_plan(plan)
             candidates = []
             selected = None
+        suspended = state.get('suspended_task')
+        if previous and not continuing and plan.intent not in {'unknown'}:
+            suspended = {key: state.get(key) for key in (
+                'pending_action', 'intent', 'selected_event', 'candidate_events',
+                'conflict_events', 'alternatives', 'proposed_changes', 'affected_events',
+                'awaiting_confirmation', 'confirmation_status')}
 
         # An explicit follow-up can authorize relocating the preserved conflict.
         move_existing = bool(re.search(r"\b(?:move|shift|reschedule)\b", query, re.I))
@@ -870,7 +933,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                         duration = _plan_datetime(action["end_time"]) - proposed if action.get("end_time") else timedelta(hours=1)
                         action["start_time"], action["end_time"] = prior.isoformat(), (prior + duration).isoformat()
             _normalise_action_times(action, query)
-            _complete_free_slot_action(action, query, continuing=continuing)
+            _complete_free_slot_action(action, query, continuing=continuing, preferences=preferences)
             _complete_create_duration(action, query)
             if action.get("intent") == "create" and action.get("start_time") and bare and not re.search(r"\d\s*(?:am|pm)\b|\b(?:morning|evening|UTC|GMT)\b", query, re.I):
                 proposed = _plan_datetime(action["start_time"])
@@ -883,6 +946,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
 
         return {
             "intent": action.get("intent", "unknown"),
+            "suspended_task": suspended,
             "pending_action": action,
             "selected_event": selected,
             "candidate_events": candidates,
@@ -947,6 +1011,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             if not result.get("success") or len(result.get("events", [])) >= 250:
                 raise ValueError("I could not safely load all affected events. Nothing was changed.")
             changes = plan_moves(result.get("events", []), action["moves"])
+            if any(preferences.protected(c.get('title')) for c in changes if c.get('action') != 'create'):
+                raise ValueError('This plan includes a protected event. Update your settings before moving it.')
             action.update(coordinated=True, start_time=beginning.isoformat())
             return {"pending_action": action, "proposed_changes": changes}
         except Exception as error:
@@ -1025,6 +1091,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 "Which one do you mean?"
             }
         action["event_id"] = selected["event_id"]
+        if preferences.protected(selected.get('title')):
+            return {'clarification': 'This event is protected in your settings. Update your protected events before moving or deleting it.'}
         _apply_followup_time(action, selected, state.get("user_query", ""))
         if action.get("intent") == "update" and not _action_ready(action):
             return {
@@ -1113,7 +1181,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         valid_window = False
         limit = 6 if availability_only else 3
         while day < requested_end and len(slots) < limit:
-            work_start, work_end = working_window(day)
+            work_start, work_end = preferences.window(day, action.get('title', ''))
             window_start = max(requested_start, work_start)
             window_end = min(requested_end, work_end)
             reference = local_now()
@@ -1122,7 +1190,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             if window_end > window_start:
                 valid_window = True
                 slots.extend(find_free_slots(
-                    state.get("candidate_events", []), window_start, window_end,
+                    preferences.busy_events(state.get("candidate_events", [])), window_start, window_end,
                     timedelta(minutes=duration_minutes), limit=limit - len(slots),
                 ))
             day = day.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
@@ -1180,6 +1248,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
     def plan_bulk_operation(state: CalendarAgentState):
         action = dict(state.get("pending_action") or {})
         events = state.get("candidate_events", [])
+        if any(preferences.protected(event.get('title')) for event in events):
+            return {'clarification': 'This bulk request includes protected events. Narrow the request or update your protected events in Settings.'}
         if not events:
             return {"clarification": "I found no events affected by that bulk request."}
         try:
@@ -1269,14 +1339,22 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return {"error": f"Conflict check failed: {safe_error_detail(error)}"}
         if not result.get("success"):
             return {"error": result.get("error", "Conflict check failed.")}
+        if action.get('intent') == 'update' and any(event.get('event_id') == action.get('event_id') and preferences.protected(event.get('title')) for event in result.get('events', [])):
+            return {'clarification': 'This event is protected in your settings. Update your protected events before moving it.'}
         excluded = {action["event_id"]} if action.get("event_id") else set()
         conflicts = overlapping_events(
             result.get("events", []), start, end, exclude_event_ids=excluded
         )
         if not conflicts:
-            return {"conflict_events": [], "alternatives": []}
+            selected = state.get('selected_event') or {}
+            change = {'action': action['intent'], 'title': action.get('title') or selected.get('title'),
+                      'old_start': selected.get('start'), 'old_end': selected.get('end'),
+                      'new_start': start.isoformat(), 'new_end': end.isoformat()}
+            return {"conflict_events": [], "alternatives": [], 'proposed_changes': [change]}
 
         if action.get("intent") == "create" and action.get("conflict_strategy") in {"relocate", "propose_relocation"}:
+            if any(preferences.protected(event.get('title')) for event in conflicts):
+                return {'clarification': 'A conflicting event is protected in your settings. Choose another time or update your protected events first.', 'conflict_events': conflicts}
             if len(result.get("events", [])) >= 250:
                 return {"clarification": "There are too many events to safely rearrange this window. Please narrow the request."}
             action["end_time"] = end.isoformat()
@@ -1288,7 +1366,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                     if not extra.get("success") or len(extra.get("events", [])) >= 250:
                         return {"error": "Could not safely check the replacement day. Nothing was changed."}
                     planning_events.extend(extra.get("events", []))
-                changes = relocation_plan(planning_events, conflicts, action)
+                changes = relocation_plan(planning_events, conflicts, action, preferences=preferences)
             except Exception as error:
                 return {"pending_action": action, "conflict_events": conflicts, "clarification": safe_error_detail(error)}
             action["coordinated"] = True
@@ -1299,11 +1377,11 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return {"pending_action": action, "conflict_events": conflicts,
                     "affected_events": conflicts, "proposed_changes": changes}
 
-        window_start, window_end = working_window(start)
+        window_start, window_end = preferences.window(start)
         alternative_start = max(end, window_start)
         alternatives = (
             find_free_slots(
-                result.get("events", []),
+                preferences.busy_events(result.get("events", [])),
                 alternative_start,
                 window_end,
                 end - start,
@@ -1337,7 +1415,11 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             return "generate_response"
         action = state.get("pending_action") or {}
         if action.get("coordinated"):
+            if preferences.preview_changes and state.get('confirmation_status') != 'approved':
+                return 'request_confirmation'
             return "execute_relocation" if action.get("relocation_authorized") else "request_confirmation"
+        if preferences.preview_changes and state.get('confirmation_status') != 'approved':
+            return 'request_confirmation'
         return "execute_action"
 
     def execute_relocation(state: CalendarAgentState):
@@ -1350,6 +1432,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         changes = state.get("proposed_changes", [])
         completed = []
         try:
+            if any(preferences.protected(change.get('title')) for change in changes if change.get('action') == 'update'):
+                raise ValueError('A planned event is protected in Settings. Nothing was changed.')
             day_start, day_end = day_window(_plan_datetime(action["start_time"]))
             latest_end = max(_plan_datetime(c.get("old_end") or c["new_end"]) for c in changes)
             latest_end = max(latest_end, max(_plan_datetime(c["new_end"]) for c in changes))
@@ -1380,7 +1464,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                     raise ValueError("A calendar operation failed. Check your calendar before retrying.")
                 completed.append(change)
             text = "Schedule updated:\n" + "\n".join(
-                f"{'Moved' if c['action'] == 'update' else 'Created'} {c['title']} — {format_local_range(c['new_start'], c['new_end'])}" for c in completed)
+                f"{'Moved' if c['action'] == 'update' else 'Created'} {c['title']}: {format_local_range(c['new_start'], c['new_end'])}" for c in completed)
             return {"messages": [AIMessage(content=text)], "response": text, "verified": True,
                     "pending_action": None, "proposed_changes": [], "conflict_events": [],
                     "awaiting_confirmation": False, "tool_result": {"success": True, "results": completed}}
@@ -1410,7 +1494,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         for index, change in enumerate(changes, start=1):
             if change["action"] == "delete":
                 rows.append(
-                    f"{index}. Delete {change.get('title')} — "
+                    f"{index}. Delete {change.get('title')}: "
                     f"{format_local_range(change.get('old_start'), change.get('old_end'))}"
                 )
             elif change["action"] == "update":
@@ -1421,7 +1505,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 )
             else:
                 rows.append(
-                    f"{index}. Create {change.get('title')} — "
+                    f"{index}. Create {change.get('title')}: "
                     f"{format_local_range(change.get('new_start'), change.get('new_end'))}"
                 )
         text = "Proposed changes:\n" + "\n".join(rows) + "\nProceed? (yes/no)"
@@ -1433,6 +1517,8 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         }
 
     def execute_bulk_action(state: CalendarAgentState):
+        if any(preferences.protected(change.get('title')) for change in state.get('proposed_changes', [])):
+            return {'error': 'A planned event is now protected in Settings. Nothing was changed.', 'tool_result': {'success': False, 'error': 'A planned event is protected.'}}
         results = []
         for change in state.get("proposed_changes", []):
             try:
@@ -1501,10 +1587,25 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
             if key in allowed and value is not None
         }
         try:
+            if intent in {'delete','update'} and preferences.protected_titles:
+                selected = state.get('selected_event') or {}
+                if not selected:
+                    from app.calendar_service import _normalise_event
+                    from app.config import CALENDAR_ID
+                    selected = _normalise_event(service.events().get(calendarId=CALENDAR_ID, eventId=args['event_id']).execute())
+                if preferences.protected(selected.get('title')):
+                    return {'error': 'This event is protected in your settings. Nothing was changed.'}
             result = invoke_tool(state, tool_name, args)
         except Exception as error:
             return {"error": f"Calendar action failed: {safe_error_detail(error)}"}
-        return {"tool_result": result}
+        update = {"tool_result": result}
+        if intent in {'create', 'update', 'delete'}:
+            update['undo_record'] = None
+        if result.get('success') and result.get('event_id'):
+            before = state.get('selected_event')
+            if intent == 'create' or (intent == 'update' and before and set(args) <= {'event_id', 'start_time', 'end_time'}):
+                update['undo_record'] = {'kind': intent, 'before': before, 'after': result}
+        return update
 
     def verify_result(state: CalendarAgentState):
         result = state.get("tool_result") or {}
@@ -1577,7 +1678,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
                 text = "I found no matching calendar events."
             else:
                 rows = [
-                    f"{index}. {event.get('title')} — "
+                    f"{index}. {event.get('title')}: "
                     f"{format_local_range(event.get('start'), event.get('end'))}"
                     for index, event in enumerate(events, start=1)
                 ]
@@ -1595,7 +1696,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
         else:
             verb = "Created" if intent == "create" else "Updated"
             text = (
-                f"{verb} {result.get('title')} — "
+                f"{verb} {result.get('title')}: "
                 f"{format_local_range(result.get('start'), result.get('end'))}."
             )
             clear = True
@@ -1658,12 +1759,15 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None):
 class CalendarConversation:
     """Reusable graph session supporting follow-ups through a stable thread ID."""
 
-    def __init__(self, model, service, *, checkpointer=None, planner=None):
+    def __init__(self, model, service, *, checkpointer=None, planner=None, preferences=None):
+        self.service = service
+        self.preferences = SchedulingPreferences.model_validate(preferences or {})
         self.graph = create_calendar_graph(
             model,
             service,
             checkpointer=checkpointer,
             planner=planner,
+            preferences=preferences,
         )
 
     def ask(self, query: str, *, thread_id: str = "default") -> CalendarAgentState:
@@ -1671,7 +1775,77 @@ class CalendarConversation:
             raise ValueError("Calendar request cannot be empty.")
         log_workflow("user_query", thread_id=thread_id, user_query=query)
         config = {"configurable": {"thread_id": thread_id}}
-        return self.graph.invoke(
+        saved = self.graph.get_state(config).values
+        if query.strip().casefold() in {'resume', 'resume previous task', 'back to previous task'} and saved.get('suspended_task') and not saved.get('undo_pending'):
+            restored = dict(saved['suspended_task'])
+            task_fields = ('pending_action', 'intent', 'selected_event', 'candidate_events', 'conflict_events', 'alternatives', 'proposed_changes', 'affected_events', 'awaiting_confirmation', 'confirmation_status')
+            paused = {key: saved.get(key) for key in task_fields} if saved.get('pending_action') else None
+            title = (restored.get('pending_action') or {}).get('title', 'your previous calendar request')
+            text = f'Resumed {title}. Continue with the missing details, or cancel it.'
+            restored.update(suspended_task=paused, messages=[HumanMessage(content=query), AIMessage(content=text)], response=text, error=None, clarification=None, tool_result=None)
+            self.graph.update_state(config, restored)
+            return self.graph.get_state(config).values
+        if saved.get('pending_action') and not saved.get('awaiting_confirmation') and not saved.get('undo_pending') and query.strip().casefold() in {'cancel', 'cancel it', 'never mind', 'nevermind'}:
+            text = 'Cancelled the unfinished request. No calendar events were changed.'
+            self.graph.update_state(config, {'messages': [HumanMessage(content=query), AIMessage(content=text)],
+                'response': text, 'pending_action': None, 'selected_event': None, 'candidate_events': [],
+                'proposed_changes': [], 'affected_events': [], 'conflict_events': [], 'alternatives': [],
+                'awaiting_confirmation': False, 'confirmation_status': None, 'error': None, 'clarification': None})
+            return self.graph.get_state(config).values
+        # Undo has its own explicit review and cannot accidentally approve a
+        # different pending calendar proposal.
+        if query.strip().casefold() in {'undo', 'undo last change', 'undo that'} or saved.get('undo_pending'):
+            from app.undo import undo_change
+            record = saved.get('undo_record')
+            decision = _confirmation_value(query) if saved.get('undo_pending') else None
+            pending = False
+            clear_record = False
+            undo_success = False
+            if not record:
+                text = 'There is no supported change to undo in this conversation. Undo supports the latest single event creation or time move.'
+            elif decision is False:
+                text = 'Undo cancelled.'
+            elif decision is True:
+                try:
+                    if self.preferences.protected(record['after'].get('title')):
+                        raise ValueError('This event is protected in your settings.')
+                    text = undo_change(self.service, record)
+                    clear_record = True
+                    undo_success = True
+                except Exception as error:
+                    text = f'Undo could not finish: {safe_error_detail(error)} Check your calendar before retrying.'
+                    clear_record = True
+            else:
+                after = record['after']
+                current_time = format_local_range(after.get('start'), after.get('end'))
+                if record['kind'] == 'create':
+                    text = f"Delete the created event {after.get('title')} at {current_time}."
+                else:
+                    before = record['before']
+                    original_time = format_local_range(before.get('start'), before.get('end'))
+                    text = f"Move {after.get('title')} from {current_time} back to {original_time}."
+                text += ' Confirm undo? (yes/no)'
+                pending = True
+            memory = list(saved.get('memory_summary', []))
+            if undo_success:
+                memory = [item for item in memory if item.get('event_id') != record['after']['event_id']]
+                if record.get('before'):
+                    memory.append({key: record['before'].get(key) for key in ('event_id','title','start','end')})
+            self.graph.update_state(config, {'messages': [HumanMessage(content=query), AIMessage(content=text)], 'response': text,
+                'undo_pending': pending, 'undo_record': None if clear_record else record, 'error': None,
+                'tool_result': None, 'memory_summary': memory[-20:]})
+            return self.graph.get_state(config).values
+
+        # Exact read-only detours run independently, then restore the entire
+        # pending task (including selected candidates and confirmation state).
+        side_read = bool(saved.get('pending_action') and re.fullmatch(
+            r"(?:(?:show|list)(?: me)?(?: my)? (?:tasks|events|meetings)(?: for)?|what (?:events|meetings|tasks) do i have) (today|tomorrow)[?!.]?", query.strip(), re.I))
+        task_fields = ('pending_action', 'intent', 'selected_event', 'candidate_events', 'conflict_events', 'alternatives', 'proposed_changes', 'affected_events', 'awaiting_confirmation', 'confirmation_status')
+        held = {key: saved.get(key) for key in task_fields} if side_read else None
+        if held:
+            self.graph.update_state(config, {'pending_action': None, 'awaiting_confirmation': False,
+                'confirmation_status': None, 'candidate_events': [], 'selected_event': None})
+        result = self.graph.invoke(
             {
                 "messages": [HumanMessage(content=query)],
                 "user_query": query,
@@ -1679,3 +1853,28 @@ class CalendarConversation:
             },
             config=config,
         )
+        updates = {}
+        if not held and saved.get('pending_action') and result.get('intent') in {'list', 'search'}:
+            held = {key: saved.get(key) for key in task_fields}
+        if held:
+            updates.update(held)
+            updates['suspended_task'] = saved.get('suspended_task')
+            updates['response'] = result['response'] + '\nYour unfinished task is saved; you can continue it next.'
+            # Update the existing response message rather than adding a duplicate.
+            message = result['messages'][-1]
+            updates['messages'] = [AIMessage(content=updates['response'], id=message.id)]
+        if result.get('verified') and result.get('tool_result'):
+            event = result['tool_result']
+            if event.get('event_id') and event.get('start'):
+                facts = list(saved.get('memory_summary', []))
+                facts = [item for item in facts if item.get('event_id') != event['event_id']]
+                facts.append({key: event.get(key) for key in ('event_id', 'title', 'start', 'end')})
+                updates['memory_summary'] = facts[-20:]
+            elif result.get('intent') == 'delete' and event.get('event_id'):
+                updates['memory_summary'] = [item for item in saved.get('memory_summary', []) if item.get('event_id') != event['event_id']]
+        if 'results' in (result.get('tool_result') or {}):
+            updates['undo_record'] = None
+        if updates:
+            self.graph.update_state(config, updates)
+            result = self.graph.get_state(config).values
+        return result

@@ -76,6 +76,7 @@ def _normalise_event(event):
 
     return {
         "event_id": event.get("id"),
+        "etag": event.get("etag"),
         "title": event.get("summary", "(no title)"),
         "start": local_value(start.get("dateTime", start.get("date"))),
         "end": local_value(end.get("dateTime", end.get("date"))),

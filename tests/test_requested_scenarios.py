@@ -58,7 +58,7 @@ class RequestedPromptScenarios(unittest.TestCase):
         )
         self.assertEqual(insert[1]["body"]["start"]["timeZone"], "Asia/Kolkata")
         self.assertTrue(result["verified"])
-        self.assertIn("6:00 AM–7:00 AM IST", result["response"])
+        self.assertIn("6:00 AM to 7:00 AM IST", result["response"])
 
     def test_ambiguous_delete_my_meeting_asks_before_deleting(self):
         service = FakeService(

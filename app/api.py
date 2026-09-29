@@ -75,6 +75,9 @@ class ChatResponse(BaseModel):
     response: str
     intent: str | None = None
     requires_confirmation: bool = False
+    can_undo: bool = False
+    task_context: dict[str, Any] | None = None
+    paused_task: str | None = None
     confirmation_status: str | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
     affected_events: list[dict[str, Any]] = Field(default_factory=list)
@@ -166,7 +169,11 @@ def _chat_response(state: dict, thread_id: str) -> ChatResponse:
         thread_id=thread_id,
         response=response,
         intent=state.get("intent"),
-        requires_confirmation=bool(state.get("awaiting_confirmation")),
+        requires_confirmation=bool(state.get("awaiting_confirmation") or state.get('undo_pending')),
+        can_undo=bool(state.get('undo_record')) and not bool(state.get('undo_pending')),
+        paused_task=((state.get('suspended_task') or {}).get('pending_action') or {}).get('title') or ('Calendar request' if state.get('suspended_task') else None),
+        task_context={key: value for key, value in (state.get('pending_action') or {}).items()
+                      if key in {'intent', 'title', 'start_time', 'duration_minutes', 'awaiting_duration'} } or None,
         confirmation_status=state.get("confirmation_status"),
         events=events,
         affected_events=state.get("affected_events", []),

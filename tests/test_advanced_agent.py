@@ -65,7 +65,7 @@ class AdvancedAgentTests(unittest.TestCase):
         self.assertEqual(result["intent"], "free_slot")
         self.assertTrue(result["verified"])
         self.assertFalse(result["awaiting_confirmation"])
-        self.assertIn("Saturday, 12 September 2026, 7:00 PM–8:00 PM IST", result["response"])
+        self.assertIn("Saturday, 12 September 2026, 7:00 PM to 8:00 PM IST", result["response"])
         self.assertNotIn("insert", [name for name, _ in service.events().calls])
 
     @patch("app.graph_agent.local_now")
@@ -91,7 +91,7 @@ class AdvancedAgentTests(unittest.TestCase):
         )
 
         self.assertIn("Which day", first["response"])
-        self.assertIn("Saturday, 12 September 2026, 6:00 PM–7:00 PM IST", second["response"])
+        self.assertIn("Saturday, 12 September 2026, 6:00 PM to 7:00 PM IST", second["response"])
         self.assertFalse(second["awaiting_confirmation"])
 
     def test_explicit_user_clock_overrides_model_utc_clock(self):
@@ -121,7 +121,7 @@ class AdvancedAgentTests(unittest.TestCase):
         )
         self.assertEqual(
             result["response"],
-            "Created yoga — Friday, 11 September 2026, 7:00 AM–8:00 AM IST.",
+            "Created yoga: Friday, 11 September 2026, 7:00 AM to 8:00 AM IST.",
         )
 
     def test_delete_all_tasks_lists_every_event_before_confirmation(self):

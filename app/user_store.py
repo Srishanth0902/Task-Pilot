@@ -38,6 +38,7 @@ class UserStore:
                 CREATE TABLE IF NOT EXISTS oauth (id TEXT PRIMARY KEY, payload TEXT NOT NULL, expires REAL NOT NULL);
                 CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, state TEXT, busy INTEGER DEFAULT 0, updated REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS conversation_owner ON conversations(user_id, updated);
+                CREATE TABLE IF NOT EXISTS preferences (user_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
             ''')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(conversations)')}
             if 'title' not in columns:
@@ -67,6 +68,19 @@ class UserStore:
         with self.db() as db:
             db.execute('INSERT INTO users VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET profile=excluded.profile,tokens=excluded.tokens',
                        (user_id, self.seal(profile), self.seal(tokens)))
+
+    def preferences(self, user_id):
+        from app.preferences import SchedulingPreferences
+        with self.db() as db:
+            row = db.execute('SELECT payload FROM preferences WHERE user_id=?', (user_id,)).fetchone()
+        return SchedulingPreferences.model_validate(self.open(row['payload']) if row else {}).model_dump()
+
+    def save_preferences(self, user_id, preferences):
+        from app.preferences import SchedulingPreferences
+        validated = SchedulingPreferences.model_validate(preferences).model_dump()
+        with self.db() as db:
+            db.execute('INSERT INTO preferences VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET payload=excluded.payload', (user_id, self.seal(validated)))
+        return validated
 
     def user(self, user_id):
         with self.db() as db:

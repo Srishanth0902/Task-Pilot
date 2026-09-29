@@ -5,7 +5,7 @@ from app.date_utils import ensure_aware
 from app.scheduling import find_free_slots, working_window
 
 
-def relocation_plan(events, conflicts, action):
+def relocation_plan(events, conflicts, action, *, preferences=None):
     """Reserve the urgent event, then fit each displaced event later that day."""
     start = ensure_aware(datetime.fromisoformat(action["start_time"]))
     end = ensure_aware(datetime.fromisoformat(action["end_time"]))
@@ -14,7 +14,7 @@ def relocation_plan(events, conflicts, action):
     target_day = datetime.fromisoformat(action["relocation_date"]) if action.get("relocation_date") else start
     if target_day.date() < start.date() or (target_day.date() - start.date()).days > 31:
         raise ValueError("Choose a replacement date within 31 days after the new event.")
-    window_start, boundary = working_window(target_day)
+    window_start, boundary = preferences.window(target_day) if preferences else working_window(target_day)
     earliest = max(end, window_start)
     if earliest >= boundary:
         raise ValueError("There is no room later within working hours. Which other day should I search?")
@@ -27,7 +27,9 @@ def relocation_plan(events, conflicts, action):
             raise ValueError("An all-day event occupies that date. Choose another date or edit it explicitly.")
         old_start = ensure_aware(datetime.fromisoformat(event["start"]))
         old_end = ensure_aware(datetime.fromisoformat(event["end"]))
-        slots = find_free_slots(occupied, earliest, boundary, old_end - old_start, limit=1)
+        busy = preferences.busy_events(occupied) if preferences else occupied
+        preferred_start = max(earliest, preferences.window(target_day, event.get('title', ''))[0]) if preferences else earliest
+        slots = find_free_slots(busy, preferred_start, boundary, old_end - old_start, limit=1)
         if not slots:
             raise ValueError(f"No replacement slot for {event.get('title')} later that day. Which other day should I search?")
         slot = slots[0]

@@ -62,7 +62,7 @@ class NaturalDateTests(unittest.TestCase):
             format_local_range(
                 "2026-09-11T01:30:00Z", "2026-09-11T02:30:00Z"
             ),
-            "Friday, 11 September 2026, 7:00 AM–8:00 AM IST",
+            "Friday, 11 September 2026, 7:00 AM to 8:00 AM IST",
         )
 
     def test_tomorrow_after_6_pm_becomes_an_ist_window(self):

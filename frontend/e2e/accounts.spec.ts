@@ -5,7 +5,7 @@ test('signed-out visitor sees Google login and does not fetch events',async({pag
   await page.route('**/api/auth/me',route=>route.fulfill({json:{authenticated:false,login_configured:true,user:null}}));
   await page.route('**/api/events?*',route=>{eventRequests++;return route.fulfill({json:{events:[]}});});
   await page.goto('/');
-  await expect(page.getByRole('link',{name:'Choose a Google account'})).toHaveAttribute('href','/api/auth/login');
+  await expect(page.getByRole('link',{name:'Continue with Google'})).toHaveAttribute('href','/api/auth/login');
   expect(eventRequests).toBe(0);
 });
 

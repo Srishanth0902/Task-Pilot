@@ -40,6 +40,40 @@ The application is designed around two safety rules:
 - A 45-query evaluation dataset and five-metric scoring utility.
 - Offline unit tests, GitHub Actions CI, and Docker Compose deployment.
 
+## Conversation and scheduling preferences
+
+The assistant retains the latest 12 messages plus compact facts about up to 20
+previous event results. Pending tasks keep their title, time, duration, and
+selected event separately. Read-only questions can interrupt a pending request;
+the unfinished task remains available afterwards. When switching to another
+task, one paused task can be retrieved with **Resume** or `resume previous task`.
+This is bounded conversation memory, not unlimited recall of every past message.
+
+Short duration replies, explicit time/date corrections, confirmations, and
+common read requests use deterministic paths without another model request.
+For example: `Schedule Yoga tomorrow at 6 PM` → `half an hour`.
+
+In **Settings**, each account can save working hours, a preferred study starting
+hour, breaks between suggested slots, and protected event titles. These values
+are validated, encrypted, and kept separate for each Google account. Protected
+titles block assistant moves/deletes until the setting is changed. Working hours
+and breaks guide free-slot suggestions and automatic relocation; an explicit
+user-specified time can still be outside those hours.
+
+Enable **Review single event creations and time moves** to see a preview before
+those changes. Bulk operations and deletes continue to require confirmation.
+The composer displays the saved task and any missing duration.
+
+**Undo last change** supports the most recent single event creation or time-only
+move in a conversation. It asks for confirmation, rereads the event, checks its
+Google version, and uses a conditional write. Undoing a move also checks that the
+original slot remains free. Deletes, metadata edits, bulk changes, and coordinated
+relocations do not have automatic undo. A later mutation replaces the undo record;
+failed undo requests require inspecting the calendar before trying another action.
+Event facts are context rather than a live calendar cache; normal conflict checks
+still run before scheduling. Tests use simulated Google responses and do not
+create or delete real calendar events.
+
 ## Architecture
 
 ```mermaid
