@@ -329,6 +329,17 @@ timezone parsing, agent routing, ambiguous queries, conflicts, bulk
 confirmations, follow-up memory, FastAPI, Streamlit, evaluation scoring,
 logging redaction, and destructive-action safety.
 
+For the complete deployment test matrix in an isolated worktree, run
+`python scripts/verify_worker.py`. It creates a local Python environment,
+installs the locked project dependencies, runs backend and frontend checks,
+and checks Docker before attempting image builds. The per-check report and logs
+are written to `.worker-results/` (ignored by Git). Run
+`python scripts/verify_worker.py --preflight` to check tool availability only.
+Use `--python-only` to validate Python bootstrap and backend checks separately.
+Exit codes are 0 for all checks passed, 1 for a failed check, and 2 when a
+required check could not be verified. CI should verify Docker builds when the
+local Docker engine is unavailable.
+
 ### Difficult prompt checks
 
 `evaluation/difficult_prompts.json` defines 32 single-turn and follow-up cases.
