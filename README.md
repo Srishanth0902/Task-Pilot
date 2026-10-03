@@ -28,6 +28,12 @@ The application is designed around two safety rules:
 ## Features
 
 - Create, list, search, update, and delete Google Calendar events.
+- Assignment tracking with deadlines, subjects, priority levels and progress state.
+- Smart Study Planner: generates study sessions from assignments, schedules them
+  subject-wise around existing commitments, and tracks progress per subject.
+- Email reminders ahead of events and assignment deadlines, with per-account
+  lead times and an opt-out.
+- Agenda, Week and Month views, plus iCalendar (.ics) and CSV export.
 - Timezone-aware parsing for tomorrow, weekdays, next week, and relative hours.
 - Stateful follow-up conversations using LangGraph checkpoints.
 - Search-before-update and search-before-delete routing.
@@ -175,6 +181,54 @@ The app writes the resulting authorization to `token.json`. `.env`,
 `credentials.json`, and `token.json` are Git-ignored and excluded from Docker
 build contexts.
 
+## Email reminders
+
+Reminders are sent by a worker process, separate from the API. Configure SMTP in
+`.env` (use an app password, never your main account password):
+
+```
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USERNAME=you@example.com
+SMTP_PASSWORD=your-app-password
+SMTP_SENDER=you@example.com
+```
+
+Run a single sweep from cron, or leave it looping beside the API:
+
+```
+python -m app.reminder_worker --once
+python -m app.reminder_worker --interval 900
+```
+
+By default a reminder goes out 24 hours and 1 hour before an event, and 48 and
+24 hours before an assignment deadline. Accounts can change those lead times or
+turn reminders off entirely in their preferences. Each reminder is claimed in
+the database before it is sent, so running the sweep from several places at
+once cannot double-send. Pass `--no-calendar` to send deadline reminders only,
+without reading Google Calendar.
+
+## Assignments and the Smart Study Planner
+
+Assignments carry a title, subject, deadline, priority, status and an effort
+estimate. The planner turns unfinished assignments into study sessions, placing
+them in free time before each deadline, most urgent first.
+
+| Route | Purpose |
+|---|---|
+| `GET/POST /assignments` | List and create assignments |
+| `PUT/DELETE /assignments/{id}` | Update or remove one |
+| `POST /study/plan` | Generate and save a plan |
+| `GET /study/plan` | The current plan |
+| `PUT /study/sessions/{id}?status=done` | Tick a session off |
+| `GET /study/progress` | Per-subject and overall progress |
+| `GET /export/calendar.ics` | Download the schedule as iCalendar |
+| `GET /export/schedule.csv` | Download the schedule as CSV |
+
+Work that cannot fit before its deadline is reported in the `unscheduled` field
+rather than dropped. Re-planning keeps sessions already marked done and
+schedules only the effort that remains.
+
 ## Environment variables
 
 | Variable | Default | Purpose |
@@ -200,6 +254,12 @@ build contexts.
 | `LOG_FILE` | `logs/task_pilot.jsonl` | Rotating JSON log path |
 | `LOG_MAX_BYTES` | `2000000` | Log rotation size |
 | `LOG_BACKUP_COUNT` | `3` | Retained rotated files |
+| `SMTP_HOST` | none | Reminder mail server; required by the reminder worker |
+| `SMTP_PORT` | `587` | Reminder mail server port |
+| `SMTP_USERNAME` | none | Reminder mail login |
+| `SMTP_PASSWORD` | none | Reminder mail app password |
+| `SMTP_SENDER` | `SMTP_USERNAME` | From address on reminder emails |
+| `SMTP_USE_TLS` | `true` | STARTTLS for reminder mail |
 
 ## Running the application
 

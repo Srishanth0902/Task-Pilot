@@ -107,3 +107,45 @@ export function safeLink(url?: string): string | undefined {
     return undefined;
   }
 }
+
+// ---- month grid -----------------------------------------------------------
+// All arithmetic goes through dateKey/shiftDay so the grid stays in the
+// application timezone rather than the browser's.
+
+export function monthStart(day: string): string {
+  return `${day.slice(0, 7)}-01`;
+}
+
+export function shiftMonth(day: string, amount: number): string {
+  const [year, month] = day.slice(0, 7).split("-").map(Number);
+  const moved = new Date(Date.UTC(year, month - 1 + amount, 1, 12));
+  return `${moved.getUTCFullYear()}-${String(moved.getUTCMonth() + 1).padStart(2, "0")}-01`;
+}
+
+/** The Monday-first 6x7 grid covering a month, as date keys. */
+export function monthGrid(day: string): string[] {
+  const first = monthStart(day);
+  const weekday = new Date(`${first}T12:00:00+05:30`).getUTCDay();
+  const lead = (weekday + 6) % 7; // Monday = 0
+  const start = shiftDay(first, -lead);
+  return Array.from({ length: 42 }, (_, index) => shiftDay(start, index));
+}
+
+export function monthLabel(day: string): string {
+  return new Date(`${monthStart(day)}T12:00:00+05:30`).toLocaleDateString("en-IN", {
+    timeZone: zone,
+    month: "long",
+    year: "numeric",
+  });
+}
+
+export function download(path: string, filename: string) {
+  // Same-origin link click: the cookie goes with it and the browser saves the
+  // file, so no token ever reaches JavaScript.
+  const link = document.createElement("a");
+  link.href = `/api${path}`;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}

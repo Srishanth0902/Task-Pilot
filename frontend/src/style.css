@@ -173,7 +173,7 @@ button:active:not(:disabled), .auth-action:active { transform: scale(0.98); }
 .icon-button:hover:not(:disabled) { background: var(--surface); border-color: var(--border); }
 .date-picker { width: 36px; height: 36px; position: relative; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface); }
 .date-picker input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
-.segmented { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: var(--radius-control); background: var(--border); }
+.segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px; border-radius: var(--radius-control); background: var(--border); }
 .segmented button { min-height: 31px; padding: 0 11px; border: 0; background: transparent; color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; }
 .segmented button.selected { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
 
@@ -406,4 +406,121 @@ dialog label { display: grid; gap: 6px; color: var(--text-secondary); font-size:
 @media (prefers-contrast: more) {
   :root { --border: #8b929c; --border-strong: #686f79; }
   .sidebar, .topbar, .assistant-pane, .ledger, .composer, dialog { border-color: var(--border-strong); }
+}
+
+/* ---- month view ---------------------------------------------------------
+   A six-row grid so every month keeps the same height and the panel does not
+   jump as you page through the year. */
+.export-controls {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.month-grid {
+  border: 1px solid var(--line, #d9d7cc);
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--panel, #fff);
+}
+.month-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  background: var(--surface-muted, #f3f2ea);
+  border-bottom: 1px solid var(--line, #d9d7cc);
+}
+.month-weekdays span {
+  padding: 10px 8px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted, #6b6b5f);
+  text-align: left;
+}
+.month-cells {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  grid-auto-rows: minmax(104px, auto);
+}
+.month-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+  text-align: left;
+  padding: 8px;
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--line, #e4e2d8);
+  border-bottom: 1px solid var(--line, #e4e2d8);
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  min-width: 0;
+}
+.month-cell:nth-child(7n) { border-right: 0; }
+.month-cell:nth-child(n + 36) { border-bottom: 0; }
+.month-cell:hover,
+.month-cell:focus-visible {
+  background: var(--surface-muted, #f3f2ea);
+  outline: none;
+}
+.month-cell.outside { opacity: 0.38; }
+.month-cell-date {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted, #6b6b5f);
+}
+.month-cell.today .month-cell-date {
+  background: var(--accent, #2f4f3e);
+  color: #fff;
+  border-radius: 999px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.month-cell-items {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.month-chip {
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--chip, #e7ede8);
+  color: var(--accent, #2f4f3e);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.month-more {
+  font-size: 10px;
+  color: var(--muted, #6b6b5f);
+}
+
+@media (max-width: 760px) {
+  .month-cells { grid-auto-rows: minmax(74px, auto); }
+  .month-chip { font-size: 10px; padding: 1px 4px; }
+  .month-weekdays span { padding: 8px 4px; font-size: 10px; }
+}
+
+/* Export buttons sit beside the view switcher and must not crowd it. */
+.view-controls { flex-wrap: wrap; }
+.export-controls button.ghost {
+  min-height: 31px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.export-controls button.ghost:hover {
+  color: var(--text);
+  border-color: var(--text-tertiary);
 }

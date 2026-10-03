@@ -1,13 +1,14 @@
 """Authenticated HTTP application; no shared Desktop OAuth token fallback."""
 import json
 import os
+from datetime import timedelta
 import secrets
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token
 from google.oauth2.credentials import Credentials
@@ -17,11 +18,15 @@ from langchain_core.messages import messages_from_dict, messages_to_dict
 
 from app.config import PROJECT_ROOT, OPENROUTER_MODEL, TIMEZONE, OPENROUTER_API_KEY
 from app.calendar_service import get_events
-from app.date_utils import coerce_datetime
+from app.date_utils import coerce_datetime, local_now
 from app.graph_agent import CalendarConversation
 from app.llm import create_openrouter_model
 from app.user_store import UserStore
 from app.preferences import SchedulingPreferences
+from app.assignments import Assignment
+from app.study_planner import plan_sessions, progress, unschedulable
+from app.reminders import SmtpMailer
+from app.calendar_export import to_csv, to_ics
 
 COOKIE = 'task_pilot_session'
 SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/calendar']
@@ -141,7 +146,8 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
     def health():
         return {'status': 'ok', 'service':'task-pilot', 'model':OPENROUTER_MODEL, 'timezone':TIMEZONE,
                 'openrouter_configured': bool(OPENROUTER_API_KEY), 'google_credentials_configured':oauth_file.exists(),
-                'google_token_configured':False, 'authentication_required':True}
+                'google_token_configured':False, 'authentication_required':True,
+                'email_reminders_configured': SmtpMailer().configured}
 
     @app.get('/auth/me')
     def me(request: Request):
@@ -255,6 +261,100 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
             raise
         except Exception:
             raise HTTPException(503, 'The request could not finish. Check your calendar before retrying any changes.') from None
+
+    @app.get('/assignments')
+    def list_assignments(include_done: bool = Query(True), user_id=Depends(current_user)):
+        return store.assignments(user_id, include_done=include_done)
+
+    @app.post('/assignments')
+    def create_assignment(body: Assignment, user_id=Depends(current_user)):
+        return store.save_assignment(user_id, body.model_dump())
+
+    @app.put('/assignments/{assignment_id}')
+    def update_assignment(assignment_id: str, body: Assignment, user_id=Depends(current_user)):
+        try:
+            return store.save_assignment(user_id, body.model_dump(), assignment_id=assignment_id)
+        except PermissionError:
+            raise HTTPException(404, 'Assignment not found') from None
+
+    @app.delete('/assignments/{assignment_id}')
+    def remove_assignment(assignment_id: str, user_id=Depends(current_user)):
+        if not store.delete_assignment(user_id, assignment_id):
+            raise HTTPException(404, 'Assignment not found')
+        return {'deleted': True, 'id': assignment_id}
+
+    def _calendar_events(user_id, days):
+        """Read the window the planner needs, tolerating a calendar outage.
+
+        A planner that refuses to run because Google is slow is worse than one
+        that plans against an empty week and says so, so failures here degrade
+        to "no known commitments" rather than a 502.
+        """
+        service = runtime.service(user_id)
+        try:
+            now = local_now()
+            result = get_events(service, 250, now, now + timedelta(days=days + 1))
+            return result.get('events', []) if result.get('success') else []
+        except Exception:
+            return []
+        finally:
+            if hasattr(service, 'close'):
+                service.close()
+
+    @app.get('/study/plan')
+    def study_plan(user_id=Depends(current_user)):
+        return {'sessions': store.study_sessions(user_id)}
+
+    @app.post('/study/plan')
+    def generate_study_plan(days: int = Query(7, ge=1, le=28), user_id=Depends(current_user)):
+        work = store.assignments(user_id, include_done=False)
+        done_minutes = store.completed_minutes(user_id)
+        sessions = plan_sessions(
+            work, _calendar_events(user_id, days), store.preferences(user_id),
+            days=days, completed_minutes=done_minutes,
+        )
+        saved = store.replace_study_plan(user_id, sessions)
+        return {
+            'sessions': saved,
+            'unscheduled': unschedulable(work, sessions, completed_minutes=done_minutes),
+        }
+
+    @app.put('/study/sessions/{session_id}')
+    def update_study_session(session_id: str, status: str = Query(...), user_id=Depends(current_user)):
+        try:
+            return store.set_session_status(user_id, session_id, status)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        except PermissionError:
+            raise HTTPException(404, 'Study session not found') from None
+
+    @app.get('/export/calendar.ics')
+    def export_ics(days: int = Query(60, ge=1, le=365), user_id=Depends(current_user)):
+        body = to_ics(
+            _calendar_events(user_id, days),
+            store.assignments(user_id),
+            store.study_sessions(user_id),
+        )
+        return Response(
+            content=body, media_type='text/calendar; charset=utf-8',
+            headers={'Content-Disposition': 'attachment; filename="task-pilot.ics"'},
+        )
+
+    @app.get('/export/schedule.csv')
+    def export_csv(days: int = Query(60, ge=1, le=365), user_id=Depends(current_user)):
+        body = to_csv(
+            _calendar_events(user_id, days),
+            store.assignments(user_id),
+            store.study_sessions(user_id),
+        )
+        return Response(
+            content=body, media_type='text/csv; charset=utf-8',
+            headers={'Content-Disposition': 'attachment; filename="task-pilot-schedule.csv"'},
+        )
+
+    @app.get('/study/progress')
+    def study_progress(user_id=Depends(current_user)):
+        return progress(store.assignments(user_id), store.study_sessions(user_id))
 
     @app.get('/events', response_model=EventsResponse)
     def events(max_results: int = Query(10,ge=1,le=250), time_min: str|None=None, time_max: str|None=None, user_id=Depends(current_user)):
