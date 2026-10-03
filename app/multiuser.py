@@ -25,6 +25,7 @@ from app.user_store import UserStore
 from app.preferences import SchedulingPreferences
 from app.assignments import Assignment
 from app.study_planner import plan_sessions, progress, unschedulable
+from app.reminders import SmtpMailer
 
 COOKIE = 'task_pilot_session'
 SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/calendar']
@@ -144,7 +145,8 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
     def health():
         return {'status': 'ok', 'service':'task-pilot', 'model':OPENROUTER_MODEL, 'timezone':TIMEZONE,
                 'openrouter_configured': bool(OPENROUTER_API_KEY), 'google_credentials_configured':oauth_file.exists(),
-                'google_token_configured':False, 'authentication_required':True}
+                'google_token_configured':False, 'authentication_required':True,
+                'email_reminders_configured': SmtpMailer().configured}
 
     @app.get('/auth/me')
     def me(request: Request):

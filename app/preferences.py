@@ -15,6 +15,12 @@ class SchedulingPreferences(BaseModel):
     protected_titles: list[str] = Field(default_factory=list, max_length=30)
     preview_changes: bool = False
 
+    # Email reminders. Lead times are minutes before the event start or the
+    # assignment deadline; an empty list falls back to the service defaults.
+    email_reminders: bool = True
+    event_reminder_minutes: list[int] = Field(default_factory=list, max_length=4)
+    deadline_reminder_minutes: list[int] = Field(default_factory=list, max_length=4)
+
     @model_validator(mode='after')
     def valid_window(self):
         if self.work_start >= self.work_end:
@@ -24,6 +30,11 @@ class SchedulingPreferences(BaseModel):
         self.protected_titles = list(dict.fromkeys(x.strip() for x in self.protected_titles if x.strip()))
         if any(len(x) > 100 for x in self.protected_titles):
             raise ValueError('Protected event titles must be 100 characters or fewer.')
+        for name in ('event_reminder_minutes', 'deadline_reminder_minutes'):
+            leads = sorted({int(v) for v in getattr(self, name)}, reverse=True)
+            if any(not 5 <= v <= 20160 for v in leads):
+                raise ValueError('Reminder lead times must be between 5 minutes and 14 days.')
+            setattr(self, name, leads)
         return self
 
     def window(self, day, title=''):
