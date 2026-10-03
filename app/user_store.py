@@ -41,6 +41,8 @@ class UserStore:
                 CREATE TABLE IF NOT EXISTS preferences (user_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS assignments (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL, due REAL NOT NULL, priority TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS assignment_owner ON assignments(user_id, due);
+                CREATE TABLE IF NOT EXISTS study_sessions (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, assignment_id TEXT, payload TEXT NOT NULL, start REAL NOT NULL, finish REAL NOT NULL, minutes INTEGER NOT NULL, status TEXT NOT NULL, created REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS study_owner ON study_sessions(user_id, start);
                 CREATE TABLE IF NOT EXISTS reminders_sent (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, sent REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS reminder_age ON reminders_sent(sent);
             ''')
@@ -300,3 +302,84 @@ class UserStore:
                 (digest(user_id + ':' + key), user_id, now),
             )
         return cursor.rowcount == 1
+
+    # ---- study sessions -------------------------------------------------
+
+    def _session_record(self, row):
+        from datetime import datetime, timezone
+
+        payload = self.open(row['payload'])
+        return {
+            'id': row['id'],
+            'assignment_id': row['assignment_id'],
+            'title': payload.get('title', ''),
+            'subject': payload.get('subject', 'General'),
+            'start': datetime.fromtimestamp(row['start'], timezone.utc).isoformat(),
+            'end': datetime.fromtimestamp(row['finish'], timezone.utc).isoformat(),
+            'minutes': row['minutes'],
+            'status': row['status'],
+        }
+
+    def replace_study_plan(self, user_id, sessions):
+        """Store a freshly generated plan.
+
+        Only sessions still marked 'planned' are discarded: a session the
+        student already ticked off is history, and re-planning must not erase
+        the record of work actually done.
+        """
+        from datetime import datetime
+
+        now = time.time()
+        with self.db() as db:
+            db.execute("DELETE FROM study_sessions WHERE user_id=? AND status='planned'", (user_id,))
+            for session in sessions:
+                payload = {'title': session.get('title', ''), 'subject': session.get('subject', 'General')}
+                db.execute(
+                    'INSERT INTO study_sessions VALUES (?,?,?,?,?,?,?,?,?)',
+                    (secrets.token_urlsafe(12), user_id, session.get('assignment_id'),
+                     self.seal(payload),
+                     datetime.fromisoformat(session['start']).timestamp(),
+                     datetime.fromisoformat(session['end']).timestamp(),
+                     int(session.get('minutes', 0)), 'planned', now),
+                )
+        return self.study_sessions(user_id)
+
+    def study_sessions(self, user_id):
+        with self.db() as db:
+            rows = db.execute(
+                'SELECT * FROM study_sessions WHERE user_id=? ORDER BY start LIMIT 500',
+                (user_id,),
+            ).fetchall()
+        return [self._session_record(row) for row in rows]
+
+    def set_session_status(self, user_id, session_id, status):
+        if status not in {'planned', 'done', 'skipped'}:
+            raise ValueError('Study session status must be planned, done, or skipped')
+        with self.db() as db:
+            cursor = db.execute(
+                'UPDATE study_sessions SET status=? WHERE id=? AND user_id=?',
+                (status, session_id, user_id),
+            )
+        if cursor.rowcount != 1:
+            raise PermissionError('Study session not found')
+        return self.study_session(user_id, session_id)
+
+    def study_session(self, user_id, session_id):
+        with self.db() as db:
+            row = db.execute(
+                'SELECT * FROM study_sessions WHERE id=? AND user_id=?',
+                (session_id, user_id),
+            ).fetchone()
+        if not row:
+            raise PermissionError('Study session not found')
+        return self._session_record(row)
+
+    def completed_minutes(self, user_id):
+        """Minutes already studied per assignment, for re-planning."""
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT assignment_id, SUM(minutes) AS total FROM study_sessions "
+                "WHERE user_id=? AND status='done' GROUP BY assignment_id",
+                (user_id,),
+            ).fetchall()
+        return {row['assignment_id']: row['total'] for row in rows if row['assignment_id']}
