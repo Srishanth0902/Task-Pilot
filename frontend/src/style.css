@@ -173,7 +173,7 @@ button:active:not(:disabled), .auth-action:active { transform: scale(0.98); }
 .icon-button:hover:not(:disabled) { background: var(--surface); border-color: var(--border); }
 .date-picker { width: 36px; height: 36px; position: relative; display: grid; place-items: center; border: 1px solid var(--border-strong); border-radius: var(--radius-control); background: var(--surface); }
 .date-picker input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
-.segmented { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border-radius: var(--radius-control); background: var(--border); }
+.segmented { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; padding: 3px; border-radius: var(--radius-control); background: var(--border); }
 .segmented button { min-height: 31px; padding: 0 11px; border: 0; background: transparent; color: var(--text-secondary); font-size: 0.78rem; font-weight: 600; }
 .segmented button.selected { background: var(--surface); color: var(--text); box-shadow: var(--shadow-sm); }
 
@@ -506,4 +506,21 @@ dialog label { display: grid; gap: 6px; color: var(--text-secondary); font-size:
   .month-cells { grid-auto-rows: minmax(74px, auto); }
   .month-chip { font-size: 10px; padding: 1px 4px; }
   .month-weekdays span { padding: 8px 4px; font-size: 10px; }
+}
+
+/* Export buttons sit beside the view switcher and must not crowd it. */
+.view-controls { flex-wrap: wrap; }
+.export-controls button.ghost {
+  min-height: 31px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.export-controls button.ghost:hover {
+  color: var(--text);
+  border-color: var(--text-tertiary);
 }
