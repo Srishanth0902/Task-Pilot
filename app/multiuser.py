@@ -22,6 +22,7 @@ from app.graph_agent import CalendarConversation
 from app.llm import create_openrouter_model
 from app.user_store import UserStore
 from app.preferences import SchedulingPreferences
+from app.assignments import Assignment
 
 COOKIE = 'task_pilot_session'
 SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/calendar']
@@ -255,6 +256,27 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
             raise
         except Exception:
             raise HTTPException(503, 'The request could not finish. Check your calendar before retrying any changes.') from None
+
+    @app.get('/assignments')
+    def list_assignments(include_done: bool = Query(True), user_id=Depends(current_user)):
+        return store.assignments(user_id, include_done=include_done)
+
+    @app.post('/assignments')
+    def create_assignment(body: Assignment, user_id=Depends(current_user)):
+        return store.save_assignment(user_id, body.model_dump())
+
+    @app.put('/assignments/{assignment_id}')
+    def update_assignment(assignment_id: str, body: Assignment, user_id=Depends(current_user)):
+        try:
+            return store.save_assignment(user_id, body.model_dump(), assignment_id=assignment_id)
+        except PermissionError:
+            raise HTTPException(404, 'Assignment not found') from None
+
+    @app.delete('/assignments/{assignment_id}')
+    def remove_assignment(assignment_id: str, user_id=Depends(current_user)):
+        if not store.delete_assignment(user_id, assignment_id):
+            raise HTTPException(404, 'Assignment not found')
+        return {'deleted': True, 'id': assignment_id}
 
     @app.get('/events', response_model=EventsResponse)
     def events(max_results: int = Query(10,ge=1,le=250), time_min: str|None=None, time_max: str|None=None, user_id=Depends(current_user)):

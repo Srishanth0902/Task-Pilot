@@ -39,6 +39,10 @@ class UserStore:
                 CREATE TABLE IF NOT EXISTS conversations (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, title TEXT, state TEXT, busy INTEGER DEFAULT 0, updated REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS conversation_owner ON conversations(user_id, updated);
                 CREATE TABLE IF NOT EXISTS preferences (user_id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS assignments (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL, due REAL NOT NULL, priority TEXT NOT NULL, status TEXT NOT NULL, created REAL NOT NULL, updated REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS assignment_owner ON assignments(user_id, due);
+                CREATE TABLE IF NOT EXISTS reminders_sent (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, sent REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS reminder_age ON reminders_sent(sent);
             ''')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(conversations)')}
             if 'title' not in columns:
@@ -182,3 +186,117 @@ class UserStore:
                     title = self.name_conversation(user_id, row['id'], first)
             result.append({'id': row['id'], 'title': title or 'Conversation', 'updated': row['updated']})
         return result
+
+    # ---- assignments ---------------------------------------------------
+    # Titles, subjects and notes are coursework details, so they are sealed
+    # like everything else. Deadline, priority and status stay in plain
+    # columns because the reminder sweep and the planner have to query on
+    # them, and on their own they reveal nothing about what the work is.
+
+    def save_assignment(self, user_id, assignment, assignment_id=None):
+        """Insert or replace one assignment; returns the stored record."""
+        from app.assignments import Assignment
+
+        validated = Assignment.model_validate(assignment)
+        now = time.time()
+        identity = assignment_id or secrets.token_urlsafe(12)
+        payload = {
+            'title': validated.title,
+            'subject': validated.subject,
+            'notes': validated.notes,
+            'estimated_minutes': validated.estimated_minutes,
+        }
+        with self.db() as db:
+            if assignment_id:
+                owned = db.execute(
+                    'SELECT created FROM assignments WHERE id=? AND user_id=?',
+                    (assignment_id, user_id),
+                ).fetchone()
+                if not owned:
+                    raise PermissionError('Assignment not found')
+                created = owned['created']
+            else:
+                created = now
+            db.execute(
+                'INSERT INTO assignments VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
+                'payload=excluded.payload,due=excluded.due,priority=excluded.priority,'
+                'status=excluded.status,updated=excluded.updated',
+                (identity, user_id, self.seal(payload), validated.due.timestamp(),
+                 validated.priority, validated.status, created, now),
+            )
+        return self.assignment(user_id, identity)
+
+    def _assignment_record(self, row):
+        from datetime import datetime, timezone
+
+        payload = self.open(row['payload'])
+        return {
+            'id': row['id'],
+            'title': payload.get('title', ''),
+            'subject': payload.get('subject', ''),
+            'notes': payload.get('notes', ''),
+            'estimated_minutes': payload.get('estimated_minutes', 60),
+            'due': datetime.fromtimestamp(row['due'], timezone.utc).isoformat(),
+            'due_timestamp': row['due'],
+            'priority': row['priority'],
+            'status': row['status'],
+            'created': row['created'],
+            'updated': row['updated'],
+        }
+
+    def assignment(self, user_id, assignment_id):
+        with self.db() as db:
+            row = db.execute(
+                'SELECT * FROM assignments WHERE id=? AND user_id=?',
+                (assignment_id, user_id),
+            ).fetchone()
+        if not row:
+            raise PermissionError('Assignment not found')
+        return self._assignment_record(row)
+
+    def assignments(self, user_id, include_done=True):
+        query = 'SELECT * FROM assignments WHERE user_id=?'
+        if not include_done:
+            query += " AND status!='done'"
+        query += ' ORDER BY due LIMIT 500'
+        with self.db() as db:
+            rows = db.execute(query, (user_id,)).fetchall()
+        return [self._assignment_record(row) for row in rows]
+
+    def delete_assignment(self, user_id, assignment_id):
+        with self.db() as db:
+            cursor = db.execute(
+                'DELETE FROM assignments WHERE id=? AND user_id=?',
+                (assignment_id, user_id),
+            )
+        return cursor.rowcount == 1
+
+    def assignments_due_between(self, start, end):
+        """Unfinished assignments across all accounts, for the reminder sweep."""
+        with self.db() as db:
+            rows = db.execute(
+                "SELECT * FROM assignments WHERE status!='done' AND due>=? AND due<=? ORDER BY due",
+                (start, end),
+            ).fetchall()
+        return [(row['user_id'], self._assignment_record(row)) for row in rows]
+
+    def user_ids(self):
+        with self.db() as db:
+            return [row['id'] for row in db.execute('SELECT id FROM users')]
+
+    # ---- reminder de-duplication ---------------------------------------
+
+    def reminder_claim(self, user_id, key, retention=30 * 24 * 60 * 60):
+        """Claim one reminder exactly once; False means it already went out.
+
+        The insert itself is the claim, so two sweeps racing on the same
+        reminder cannot both win and double-send.
+        """
+        now = time.time()
+        with self.db() as db:
+            db.execute('DELETE FROM reminders_sent WHERE sent<?', (now - retention,))
+            cursor = db.execute(
+                'INSERT OR IGNORE INTO reminders_sent VALUES (?,?,?)',
+                (digest(user_id + ':' + key), user_id, now),
+            )
+        return cursor.rowcount == 1
