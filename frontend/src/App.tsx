@@ -23,6 +23,11 @@ import {
   request,
   dateKey,
   shiftDay,
+  monthGrid,
+  monthLabel,
+  monthStart,
+  shiftMonth,
+  download,
   clock,
   dayLabel,
   range,
@@ -68,7 +73,7 @@ export default function App() {
 function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:()=>Promise<void>;switchAccount:()=>Promise<void>}) {
   const client = useQueryClient();
   const [day, setDay] = useState(dateKey());
-  const [view, setView] = useState<"agenda" | "week">("agenda");
+  const [view, setView] = useState<"agenda" | "week" | "month">("agenda");
   const [page, setPage] = useState("schedule");
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
@@ -112,7 +117,11 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
     queryKey: ["events", user.id, day, view],
     queryFn: () =>
       request<{ success: boolean; events: CalendarEvent[]; count: number }>(
-        `/events?max_results=250&time_min=${encodeURIComponent(day + "T00:00:00+05:30")}&time_max=${encodeURIComponent(shiftDay(day, view === "week" ? 7 : 1) + "T00:00:00+05:30")}`,
+        (() => {
+        const from = view === "month" ? monthGrid(day)[0] : day;
+        const span = view === "month" ? 42 : view === "week" ? 7 : 1;
+        return `/events?max_results=250&time_min=${encodeURIComponent(from + "T00:00:00+05:30")}&time_max=${encodeURIComponent(shiftDay(from, span) + "T00:00:00+05:30")}`;
+      })(),
       ),
   });
   const rows = (events.data?.events || [])
@@ -353,14 +362,14 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                   <button
                     className="icon-button"
                     aria-label="Previous day"
-                    onClick={() => setDay(shiftDay(day, -1))}
+                    onClick={() => setDay(view === "month" ? shiftMonth(day, -1) : shiftDay(day, -1))}
                   >
                     <ChevronLeft size={16} />
                   </button>
                   <button
                     className="icon-button"
                     aria-label="Next day"
-                    onClick={() => setDay(shiftDay(day, 1))}
+                    onClick={() => setDay(view === "month" ? shiftMonth(day, 1) : shiftDay(day, 1))}
                   >
                     <ChevronRight size={16} />
                   </button>
@@ -390,6 +399,29 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                     >
                       Week
                     </button>
+                    <button
+                      aria-pressed={view === "month"}
+                      className={view === "month" ? "selected" : ""}
+                      onClick={() => setView("month")}
+                    >
+                      Month
+                    </button>
+                  </div>
+                  <div className="export-controls">
+                    <button
+                      className="ghost"
+                      title="Download your schedule as an .ics calendar file"
+                      onClick={() => download("/export/calendar.ics", "task-pilot.ics")}
+                    >
+                      Export .ics
+                    </button>
+                    <button
+                      className="ghost"
+                      title="Download your schedule as a spreadsheet"
+                      onClick={() => download("/export/schedule.csv", "task-pilot-schedule.csv")}
+                    >
+                      Export CSV
+                    </button>
                   </div>
                   <button
                     className="primary"
@@ -410,7 +442,7 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
               </div>
               <div className="date-heading">
                 <div className="heading-kicker">
-                  <span className="tag">{view === "week" ? "Week view" : "Day view"}</span>
+                  <span className="tag">{view === "month" ? "Month view" : view === "week" ? "Week view" : "Day view"}</span>
                   <span>
                     {new Intl.DateTimeFormat("en-GB", {
                       month: "long",
@@ -429,12 +461,27 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                   {dayLabel(day)}
                 </h1>
                 <p>
-                  {view === "week"
-                    ? "Events for the next seven days."
-                    : "Events and open time for this date."}{" "}
+                  {view === "month"
+                    ? "Every event this month. Select a day to open it."
+                    : view === "week"
+                      ? "Events for the next seven days."
+                      : "Events and open time for this date."}{" "}
                   <span>All times in IST.</span>
                 </p>
               </div>
+              {view === "month" ? (
+                <MonthGrid
+                  day={day}
+                  events={rows}
+                  loading={events.isPending}
+                  failed={events.isError}
+                  onRetry={() => events.refetch()}
+                  onPickDay={(picked) => {
+                    setDay(picked);
+                    setView("agenda");
+                  }}
+                />
+              ) : (
               <div className="ledger">
                 <div className="ledger-head">
                   <span>TIME</span>
@@ -573,6 +620,7 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
                   <span>Task Pilot</span>
                 </footer>
               </div>
+              )}
             </>
           )}
         </section>
@@ -963,6 +1011,96 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
           </div>
         )}
       </dialog>
+    </div>
+  );
+}
+
+/** A Monday-first month grid. Days outside the month stay visible but muted,
+ *  so the week structure is never broken by a ragged edge. */
+function MonthGrid({
+  day,
+  events,
+  loading,
+  failed,
+  onRetry,
+  onPickDay,
+}: {
+  day: string;
+  events: CalendarEvent[];
+  loading: boolean;
+  failed: boolean;
+  onRetry: () => void;
+  onPickDay: (day: string) => void;
+}) {
+  const cells = monthGrid(day);
+  const month = monthStart(day).slice(0, 7);
+  const today = dateKey();
+
+  const byDay = new Map<string, CalendarEvent[]>();
+  for (const event of events) {
+    const key = (event.start || "").slice(0, 10);
+    if (!key) continue;
+    const bucket = byDay.get(key);
+    if (bucket) bucket.push(event);
+    else byDay.set(key, [event]);
+  }
+
+  if (loading) {
+    return (
+      <div className="empty">
+        <div className="loading-line" />
+        <p>Opening your calendar…</p>
+      </div>
+    );
+  }
+  if (failed) {
+    return (
+      <div className="empty error" role="alert">
+        <p>Your calendar couldn’t be loaded.</p>
+        <button className="outline" onClick={onRetry}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="month-grid" role="grid" aria-label={monthLabel(day)}>
+      <div className="month-weekdays" role="row">
+        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((name) => (
+          <span key={name} role="columnheader">
+            {name}
+          </span>
+        ))}
+      </div>
+      <div className="month-cells" role="rowgroup">
+        {cells.map((cell) => {
+          const dayEvents = byDay.get(cell) || [];
+          const outside = !cell.startsWith(month);
+          return (
+            <button
+              key={cell}
+              role="gridcell"
+              type="button"
+              className={`month-cell${outside ? " outside" : ""}${cell === today ? " today" : ""}${dayEvents.length ? " has-events" : ""}`}
+              aria-label={`${cell}, ${dayEvents.length} ${dayEvents.length === 1 ? "event" : "events"}`}
+              onClick={() => onPickDay(cell)}
+            >
+              <span className="month-cell-date">{Number(cell.slice(8, 10))}</span>
+              <span className="month-cell-items">
+                {dayEvents.slice(0, 3).map((event, index) => (
+                  <span className="month-chip" key={event.event_id || index}>
+                    {event.title || "Untitled"}
+                  </span>
+                ))}
+                {dayEvents.length > 3 && (
+                  <span className="month-more">+{dayEvents.length - 3} more</span>
+                )}
+              </span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

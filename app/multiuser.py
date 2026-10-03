@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, Response
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token
 from google.oauth2.credentials import Credentials
@@ -26,6 +26,7 @@ from app.preferences import SchedulingPreferences
 from app.assignments import Assignment
 from app.study_planner import plan_sessions, progress, unschedulable
 from app.reminders import SmtpMailer
+from app.calendar_export import to_csv, to_ics
 
 COOKIE = 'task_pilot_session'
 SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/calendar']
@@ -326,6 +327,30 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
             raise HTTPException(422, str(error)) from None
         except PermissionError:
             raise HTTPException(404, 'Study session not found') from None
+
+    @app.get('/export/calendar.ics')
+    def export_ics(days: int = Query(60, ge=1, le=365), user_id=Depends(current_user)):
+        body = to_ics(
+            _calendar_events(user_id, days),
+            store.assignments(user_id),
+            store.study_sessions(user_id),
+        )
+        return Response(
+            content=body, media_type='text/calendar; charset=utf-8',
+            headers={'Content-Disposition': 'attachment; filename="task-pilot.ics"'},
+        )
+
+    @app.get('/export/schedule.csv')
+    def export_csv(days: int = Query(60, ge=1, le=365), user_id=Depends(current_user)):
+        body = to_csv(
+            _calendar_events(user_id, days),
+            store.assignments(user_id),
+            store.study_sessions(user_id),
+        )
+        return Response(
+            content=body, media_type='text/csv; charset=utf-8',
+            headers={'Content-Disposition': 'attachment; filename="task-pilot-schedule.csv"'},
+        )
 
     @app.get('/study/progress')
     def study_progress(user_id=Depends(current_user)):
