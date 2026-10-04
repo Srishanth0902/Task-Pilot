@@ -1,10 +1,18 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from app.llm import create_openrouter_model
 
 
 class OpenRouterModelTests(unittest.TestCase):
+    def test_agent_uses_same_schema_format_as_live_smoke(self):
+        from app.graph_agent import create_calendar_graph, QueryPlan
+        from tests.test_calendar_service import FakeService
+        model = Mock()
+        create_calendar_graph(model, FakeService())
+        model.with_structured_output.assert_called_once_with(
+            QueryPlan, method='json_schema', include_raw=True)
+
     def test_builds_free_qwen_with_openrouter_endpoint(self):
         model = create_openrouter_model(api_key="test-key")
 

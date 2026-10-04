@@ -69,6 +69,20 @@ def safe_error_detail(error: Exception) -> str:
     return str(sanitize_log_data(str(error), max_string_length=500))
 
 
+def planner_error_detail(error: Exception) -> str:
+    """Translate provider failures without leaking raw routing metadata."""
+    status = getattr(error, 'status_code', None)
+    if status in {401, 403}:
+        return 'The AI service is not authorized. Please ask the administrator to check its configuration.'
+    if status == 429:
+        return 'The free AI service is temporarily at its limit. Please try again later.'
+    if status == 404 or isinstance(status, int) and status >= 500:
+        return 'The AI service is temporarily unavailable. No calendar changes were made. Please try again later.'
+    if isinstance(status, int):
+        return 'The AI service could not process this request. No calendar changes were made.'
+    return safe_error_detail(error)
+
+
 def _build_logger() -> logging.Logger:
     logger = logging.getLogger(LOGGER_NAME)
     if logger.handlers:

@@ -198,6 +198,17 @@ class RequestedPromptScenarios(unittest.TestCase):
 
 
 class RequestedErrorScenarios(unittest.TestCase):
+    def test_provider_routing_failure_is_friendly_and_never_mutates(self):
+        error = RuntimeError('private provider routing metadata')
+        error.status_code = 404
+        service = FakeService()
+        conversation = CalendarConversation(None, service, planner=Planner(error))
+        result = conversation.ask('Schedule yoga from 9pm to 10pm', thread_id='routing-failure')
+        self.assertFalse(result['verified'])
+        self.assertIn('temporarily unavailable', result['response'])
+        self.assertNotIn('routing metadata', result['response'])
+        self.assertFalse(service.events().calls)
+
     def test_llm_planner_error_is_returned_as_a_safe_agent_error(self):
         conversation = CalendarConversation(
             None,

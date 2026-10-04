@@ -30,7 +30,7 @@ from app.date_utils import (
     infer_local_time_window,
     local_now,
 )
-from app.observability import log_workflow, safe_error_detail
+from app.observability import log_workflow, safe_error_detail, planner_error_detail
 from app.rescheduling import relocation_plan
 from app.multi_event import plan_moves
 from app.preferences import SchedulingPreferences
@@ -618,7 +618,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None, pr
         raise ValueError("A LangChain-compatible chat model must be supplied.")
 
     structured_planner = planner or model.with_structured_output(
-        QueryPlan, method="function_calling", include_raw=True
+        QueryPlan, method="json_schema", include_raw=True
     )
     tools = {tool.name: tool for tool in build_calendar_tools(service)}
     preferences = SchedulingPreferences.model_validate(preferences or {})
@@ -776,7 +776,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None, pr
             plan = _coerce_query_plan(raw)
         except Exception as error:
             return {
-                "error": f"Could not understand the request: {safe_error_detail(error)}",
+                "error": f"Could not understand the request: {planner_error_detail(error)}",
                 "verified": False,
             }
 

@@ -7,6 +7,8 @@ from app.config import OPENROUTER_MODEL
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--live', action='store_true', help='Make one synthetic planner request; never access Calendar')
+    parser.add_argument('--method', choices=['json_schema', 'function_calling'], default='json_schema',
+                        help='Structured request format to verify against the live provider')
     args = parser.parse_args()
     try:
         response = requests.get('https://openrouter.ai/api/v1/models', timeout=20)
@@ -23,7 +25,7 @@ def main():
         from app.llm import create_openrouter_model
         from app.graph_agent import QueryPlan
         try:
-            result = create_openrouter_model().with_structured_output(QueryPlan, method='json_schema').invoke(
+            result = create_openrouter_model().with_structured_output(QueryPlan, method=args.method, include_raw=True).invoke(
                 'Interpret this synthetic calendar request: List my events tomorrow. Return intent=list. Do not use any external tools.')
         except Exception as error:
             # Exception text can contain generated content or provider details.
@@ -32,7 +34,7 @@ def main():
             label = f' HTTP {status}' if isinstance(status, int) else ''
             raise SystemExit(f'Live structured planning failed ({type(error).__name__}{label}). '
                              'Check free-provider availability and credentials; no Calendar calls or automatic retries were made.') from None
-        if getattr(result, 'intent', None) != 'list':
+        if result.get('parsing_error') or getattr(result.get('parsed'), 'intent', None) != 'list':
             raise SystemExit('Synthetic planning check returned an incorrect intent.')
         print('Live synthetic structured planning passed. No Google Calendar calls were made.')
 
