@@ -18,6 +18,7 @@ class OpenRouterModelTests(unittest.TestCase):
 
         self.assertEqual(model.model_name, "qwen/qwen3.8-27b:free")
         self.assertEqual(model.max_retries, 0)
+        self.assertEqual(model.extra_body['provider']['data_collection'], 'deny')
         self.assertEqual(model.extra_body['provider']['max_price'], {'prompt': 0, 'completion': 0})
         self.assertEqual(str(model.openai_api_base), "https://openrouter.ai/api/v1")
         self.assertEqual(model.temperature, 0.0)
@@ -37,6 +38,7 @@ class OpenRouterModelTests(unittest.TestCase):
         with patch.dict('os.environ', {'OPENROUTER_FREE_ONLY': 'false'}):
             model = create_openrouter_model(api_key='test', model_name='provider/paid')
         self.assertEqual(model.max_retries, 2)
+        self.assertEqual(model.extra_body['provider']['data_collection'], 'deny')
 
     def test_requires_an_api_key(self):
         with self.assertRaisesRegex(ValueError, "OPENROUTER_API_KEY"):

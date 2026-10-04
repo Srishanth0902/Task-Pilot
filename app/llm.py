@@ -50,7 +50,11 @@ def create_openrouter_model(
         # Do not spend several reservations on implicit HTTP retries. A failed
         # planner call is reported; no paid model fallback is configured.
         max_retries=0 if free_only else 2,
+        # Calendar context must not be routed to data-collecting providers.
+        # Fail closed if no compatible endpoint exists; never relax privacy
+        # or switch to a paid endpoint to make a request succeed.
         extra_body={'provider': {'require_parameters': True,
-                                'max_price': {'prompt': 0, 'completion': 0}}} if free_only else {},
+                                'data_collection': 'deny',
+                                **({'max_price': {'prompt': 0, 'completion': 0}} if free_only else {})}},
         timeout=60,
     )

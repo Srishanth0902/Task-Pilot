@@ -59,6 +59,8 @@ export default function App() {
         {auth.data?.login_configured ? <a className="auth-action" href="/api/auth/login"><UserRound size={17}/> Continue with Google</a> : <div className="auth-status">Google sign-in is being configured. Please check back shortly.</div>}
       </>}
       <small>Your calendar data stays connected to the Google account you choose.</small>
+      <small>AI requests send your message and relevant calendar context to OpenRouter and its model provider. Do not enter sensitive information you do not want processed by these services.</small>
+      <small><a href="/privacy/">Privacy policy</a> · <a href="/terms/">Terms of use</a> · <a href="mailto:netflixchill3007@gmail.com">Contact support</a></small>
     </section>
   </main>;
   const endSession = async (next: string) => {

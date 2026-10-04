@@ -96,3 +96,16 @@ class ProductionWebTests(unittest.TestCase):
     def test_missing_build_stops_startup(self):
         with self.assertRaisesRegex(ValueError, 'Built frontend is missing'):
             create_web_app(self.api, Path(self.temp.name) / 'not-built')
+
+    def test_public_policy_pages_without_login(self):
+        import shutil
+        public = Path(__file__).resolve().parents[1] / 'frontend' / 'public'
+        for page, heading in [('privacy', 'Privacy policy'), ('terms', 'Terms of use')]:
+            shutil.copytree(public / page, self.static / page)
+            response = self.client.get('/' + page + '/')
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('<h1>' + heading + '</h1>', response.text)
+            self.assertIn('netflixchill3007@gmail.com', response.text)
+            self.assertIn('href="/"', response.text)
+            self.assertEqual(response.headers['x-content-type-options'], 'nosniff')
+        self.assertEqual(self.client.get('/api/events').status_code, 401)
