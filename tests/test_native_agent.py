@@ -225,3 +225,99 @@ class NativeAgentTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NativeConflictAndSlotTests(unittest.TestCase):
+    """Conflict detection and free-slot discovery on the native calendar."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = UserStore(self.temp.name, Fernet.generate_key())
+        self.provider = NativeCalendarProvider(self.store, "alice")
+
+    def _seed(self, title, hour, minutes=60, day=5):
+        start = datetime(2026, 10, day, hour, 0, tzinfo=IST)
+        return self.provider.create_event(title, start, start + timedelta(minutes=minutes))
+
+    def test_busy_intervals_feed_conflict_detection(self):
+        from app.calendar_provider import busy_intervals
+
+        self._seed("Dinner", 19)
+        found = busy_intervals(
+            self.provider,
+            datetime(2026, 10, 5, 0, 0, tzinfo=IST),
+            datetime(2026, 10, 6, 0, 0, tzinfo=IST),
+        )
+        self.assertEqual(len(found), 1)
+
+    def test_overlapping_events_are_detected(self):
+        from app.scheduling import overlapping_events
+
+        self._seed("Dinner", 19)
+        window = self.provider.list_events(
+            250, datetime(2026, 10, 5, 0, 0, tzinfo=IST),
+            datetime(2026, 10, 6, 0, 0, tzinfo=IST),
+        )
+        clash = overlapping_events(
+            window["events"],
+            datetime(2026, 10, 5, 19, 30, tzinfo=IST),
+            datetime(2026, 10, 5, 20, 30, tzinfo=IST),
+        )
+        self.assertTrue(clash)
+
+    def test_free_slots_skip_occupied_time(self):
+        from app.scheduling import find_free_slots
+
+        self._seed("Dinner", 18, minutes=60)
+        window = self.provider.list_events(
+            250, datetime(2026, 10, 5, 0, 0, tzinfo=IST),
+            datetime(2026, 10, 6, 0, 0, tzinfo=IST),
+        )
+        slots = find_free_slots(
+            window["events"],
+            datetime(2026, 10, 5, 18, 0, tzinfo=IST),
+            datetime(2026, 10, 5, 23, 0, tzinfo=IST),
+            timedelta(hours=2), limit=1,
+        )
+        self.assertTrue(slots)
+        self.assertGreaterEqual(slots[0]["start"], "2026-10-05T19:00")
+
+    def test_undo_works_on_the_native_calendar(self):
+        from app.undo import undo_change
+
+        created = self._seed("Mistake", 11)
+        record = {"kind": "create", "after": created, "before": None}
+        message = undo_change(self.provider, record)
+        self.assertIn("Undone", message)
+        self.assertIsNone(self.provider.get_event(created["event_id"]))
+
+    def test_undo_refuses_when_the_event_changed(self):
+        from app.undo import undo_change
+
+        created = self._seed("Moved on", 11)
+        self.provider.update_event(created["event_id"], summary="Changed elsewhere")
+        with self.assertRaises(ValueError):
+            undo_change(self.provider, {"kind": "create", "after": created, "before": None})
+        self.assertIsNotNone(self.provider.get_event(created["event_id"]))
+
+
+class NativeWithoutAnLlmTests(unittest.TestCase):
+    """Native mode is independent of Google, not of the language model."""
+
+    def test_a_missing_model_key_is_reported_clearly(self):
+        from app.llm import create_openrouter_model
+
+        with self.assertRaises(ValueError) as caught:
+            create_openrouter_model(api_key="")
+        self.assertIn("OPENROUTER_API_KEY", str(caught.exception))
+
+    def test_the_native_calendar_still_reads_without_a_model(self):
+        """Browsing the schedule must not depend on the LLM being configured."""
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        store = UserStore(temp.name, Fernet.generate_key())
+        provider = NativeCalendarProvider(store, "alice")
+        start = datetime(2026, 10, 5, 9, 0, tzinfo=IST)
+        provider.create_event("Readable", start, start + timedelta(hours=1))
+        self.assertEqual(provider.list_events(10, start - timedelta(hours=1))["count"], 1)
