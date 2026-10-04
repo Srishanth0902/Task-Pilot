@@ -94,15 +94,25 @@ class BrevoMailer:
         return True
 
 
+class DisabledMailer:
+    """Explicit opt-out: never contacts an email provider."""
+    configured = False
+
+    def send(self, to, subject, body):
+        raise RuntimeError('Email reminders are disabled.')
+
+
 def create_mailer():
     provider = os.getenv('EMAIL_PROVIDER', 'smtp').strip().lower()
+    if provider == 'disabled':
+        return DisabledMailer()
     if os.getenv('DEPLOYMENT_MODE') == 'free' and provider != 'brevo':
         raise ValueError('Free hosting requires EMAIL_PROVIDER=brevo; SMTP is unavailable on Render Free.')
     if provider == 'brevo':
         return BrevoMailer()
     if provider == 'smtp':
         return SmtpMailer()
-    raise ValueError('EMAIL_PROVIDER must be smtp or brevo.')
+    raise ValueError('EMAIL_PROVIDER must be smtp, brevo, or disabled.')
 
 
 def _lead_times(preferences, key, fallback):

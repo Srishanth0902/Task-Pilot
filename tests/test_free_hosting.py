@@ -68,6 +68,24 @@ class FreeHostingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'SMTP'):
                 create_mailer()
 
+    def test_disabled_email_never_contacts_provider(self):
+        with patch.dict(os.environ, {'DEPLOYMENT_MODE': 'free', 'EMAIL_PROVIDER': 'disabled'}), \
+                patch('app.reminders.requests.post') as post, patch('app.reminders.smtplib.SMTP') as smtp:
+            mailer = create_mailer()
+            self.assertFalse(mailer.configured)
+            with self.assertRaisesRegex(RuntimeError, 'disabled'):
+                mailer.send('a@example.com', 'Subject', 'Body')
+        post.assert_not_called()
+        smtp.assert_not_called()
+
+    def test_disabled_email_scheduler_rejects_without_reading_calendar(self):
+        client = TestClient(create_multiuser_app(self.store, runtime=Mock()))
+        with patch.dict(os.environ, {'EMAIL_PROVIDER': 'disabled', 'REMINDER_TRIGGER_SECRET': 's' * 32}), \
+                patch('app.multiuser.ReminderService') as service:
+            response = client.post('/internal/reminders', headers={'Authorization': 'Bearer ' + 's' * 32})
+        self.assertEqual(response.status_code, 503)
+        service.assert_not_called()
+
     def test_reminder_scheduler_requires_secret_not_user_cookie(self):
         app = create_multiuser_app(self.store, runtime=Mock())
         client = TestClient(app)
@@ -102,5 +120,7 @@ class FreeHostingTests(unittest.TestCase):
                     'OPENROUTER_MODEL': 'openrouter/free', 'OPENROUTER_FREE_ONLY': 'true'}
         with patch.dict(os.environ, settings):
             self.assertEqual(free_configuration_errors(), [])
+            with patch.dict(os.environ, {'EMAIL_PROVIDER': 'disabled', 'BREVO_API_KEY': '', 'EMAIL_SENDER': ''}):
+                self.assertEqual(free_configuration_errors(), [])
             with patch.dict(os.environ, {'AI_REQUESTS_PER_DAY': '1000'}):
                 self.assertTrue(free_configuration_errors())

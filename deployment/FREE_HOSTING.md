@@ -48,6 +48,12 @@ upgrades. Free allowances and availability can change.
 
 ## Account settings to fill in only when deployment is authorized
 
+Email reminders are currently deferred: the Blueprint uses `EMAIL_PROVIDER=disabled`
+and needs no Brevo account, key, or sender. Calendar, chat, and persistent user
+storage still work. Leave the scheduled reminder workflow disabled. To enable
+email later, change the Blueprint provider to `brevo`, configure `BREVO_API_KEY`
+and a verified `EMAIL_SENDER`, and complete the reminder verification below.
+
 1. Create a Neon Free project. Copy its pooled PostgreSQL connection URL with
    `sslmode=require` into Render's `DATABASE_URL` secret.
 2. Generate a Fernet key (`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`)

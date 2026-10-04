@@ -26,11 +26,7 @@ services:
       - key: OPENROUTER_FREE_ONLY
         value: "true"
       - key: EMAIL_PROVIDER
-        value: brevo
-      - key: BREVO_API_KEY
-        sync: false
-      - key: EMAIL_SENDER
-        sync: false
+        value: disabled
       - key: REMINDER_TRIGGER_SECRET
         generateValue: true
       - key: LOG_PRIVATE_CONTENT

@@ -82,7 +82,8 @@ def free_configuration_errors():
     model = os.getenv('OPENROUTER_MODEL', 'qwen/qwen3.8-27b:free')
     if model != 'openrouter/free' and not model.endswith(':free'):
         errors.append('Choose openrouter/free or an available :free model.')
-    if os.getenv('EMAIL_PROVIDER') != 'brevo' or not os.getenv('BREVO_API_KEY') or '@' not in os.getenv('EMAIL_SENDER', ''):
+    provider = os.getenv('EMAIL_PROVIDER', '').strip().lower()
+    if provider != 'disabled' and (provider != 'brevo' or not os.getenv('BREVO_API_KEY') or '@' not in os.getenv('EMAIL_SENDER', '')):
         errors.append('Reminders need EMAIL_PROVIDER=brevo, BREVO_API_KEY, and a verified EMAIL_SENDER.')
     if len(os.getenv('REMINDER_TRIGGER_SECRET', '')) < 32:
         errors.append('REMINDER_TRIGGER_SECRET must contain at least 32 characters.')

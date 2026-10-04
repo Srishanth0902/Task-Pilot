@@ -157,7 +157,7 @@ def native_smoke(record):
             env = dict(os.environ, DEPLOYMENT_MODE='free', PUBLIC_APP_URL=public, PORT=str(port),
                 DATABASE_URL=scoped_url, TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
                 GOOGLE_WEB_CREDENTIALS_FILE=str(file), OPENROUTER_API_KEY='synthetic-unused-key',
-                OPENROUTER_FREE_ONLY='true', EMAIL_PROVIDER='brevo', BREVO_API_KEY='synthetic-unused-key',
+                OPENROUTER_FREE_ONLY='true', EMAIL_PROVIDER='disabled', BREVO_API_KEY='synthetic-unused-key',
                 EMAIL_SENDER='smoke@example.com', REMINDER_TRIGGER_SECRET=uuid.uuid4().hex,
                 LOG_PRIVATE_CONTENT='false', LOG_FILE=str(folder / 'workflow.jsonl'))
             origin = 'http://127.0.0.1:' + str(port)
@@ -250,7 +250,7 @@ def main():
                 'TOKEN_ENCRYPTION_KEY': Fernet.generate_key().decode(),
                 'GOOGLE_WEB_CREDENTIALS_FILE': '/etc/secrets/credentials.web.json',
                 'OPENROUTER_API_KEY': 'synthetic-unused-key', 'OPENROUTER_FREE_ONLY': 'true',
-                'EMAIL_PROVIDER': 'brevo', 'BREVO_API_KEY': 'synthetic-unused-key',
+                'EMAIL_PROVIDER': 'disabled', 'BREVO_API_KEY': 'synthetic-unused-key',
                 'EMAIL_SENDER': 'smoke@example.com', 'REMINDER_TRIGGER_SECRET': uuid.uuid4().hex,
                 'LOG_PRIVATE_CONTENT': 'false'}
             (folder / 'run.env').write_text('\n'.join(name + '=' + value for name, value in env.items()))
