@@ -27,7 +27,9 @@ The application is designed around two safety rules:
 
 ## Features
 
-- Create, list, search, update, and delete Google Calendar events.
+- Works with Google Calendar **or** Task Pilot's own built-in calendar — no
+  Google account required.
+- Create, list, search, update, and delete calendar events.
 - Assignment tracking with deadlines, subjects, priority levels and progress state.
 - Smart Study Planner: generates study sessions from assignments, schedules them
   subject-wise around existing commitments, and tracks progress per subject.
@@ -228,6 +230,70 @@ them in free time before each deadline, most urgent first.
 Work that cannot fit before its deadline is reported in the `unscheduled` field
 rather than dropped. Re-planning keeps sessions already marked done and
 schedules only the effort that remains.
+
+## Calendars: Google or built-in
+
+Task Pilot can keep your schedule in one of two places, and the choice is
+yours at the door:
+
+| | Google Calendar | Task Pilot calendar |
+|---|---|---|
+| Needs a Google account | Yes | No |
+| Where events live | Your Google account | This app's database |
+| Reachable from another device | Yes | Only by signing in with Google |
+| Agent, reminders, study planner, export | Yes | Yes |
+
+**Connect Google Calendar** signs you in and works against your real calendar.
+**Use app's native calendar** opens a workspace straight away, with no Google
+account and nothing sent to Google.
+
+### How the active calendar is decided
+
+The server decides, never the browser. An explicit choice wins; otherwise
+Google is used when it is connected and the built-in calendar when it is not.
+The current calendar is named in the sidebar, and where both are available a
+switch sits beside it.
+
+Two rules are deliberate and worth knowing:
+
+- **Expired or failing Google access never falls back to the built-in
+  calendar.** You are told what failed and offered the switch. A silent
+  downgrade would write your events somewhere you did not choose and would not
+  think to look.
+- **A pending confirmation belongs to the calendar it was planned on.** Switch
+  calendars while an action is waiting for yes or no and the plan is dropped
+  with an explanation, rather than executed against the wrong calendar.
+
+The two calendars stay separate. Nothing is copied or synchronised between
+them.
+
+### Guest workspaces
+
+Choosing the built-in calendar creates a guest workspace held by a secure,
+server-issued session cookie. Each guest is a distinct workspace, not a shared
+anonymous account, and one guest cannot see another's events.
+
+Guest access is tied to that browser. Clearing cookies loses access to the
+workspace, and there is no way to recover it — connect Google if you need the
+same schedule on another device.
+
+### For developers
+
+`app/calendar_provider.py` defines one interface with two implementations.
+The LangChain tools, the LangGraph workflow, undo and the HTTP routes all call
+that interface, so neither the agent nor the tools contain per-provider
+branching. Adding a third calendar means writing one class.
+
+Native events carry a version token that does the job Google's etag does, so
+conditional writes behave the same on both calendars. Native events report no
+`html_link`: inventing a Google URL for an event Google has never seen would
+send you to a 404.
+
+| Route | Purpose |
+|---|---|
+| `POST /auth/guest` | Open a guest workspace on the built-in calendar |
+| `GET /calendar/status` | Active calendar, what else is available, guest flag |
+| `PUT /calendar/provider?provider=…` | Switch calendars |
 
 ## Environment variables
 

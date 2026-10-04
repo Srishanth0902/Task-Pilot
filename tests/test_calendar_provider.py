@@ -2,6 +2,7 @@
 
 import tempfile
 import unittest
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 from cryptography.fernet import Fernet
@@ -284,3 +285,58 @@ class BusyIntervalTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SchemaAndMigrationTests(unittest.TestCase):
+    """Native events must survive an upgrade and reach PostgreSQL."""
+
+    def test_sqlite_and_postgres_declare_the_same_tables(self):
+        import re
+
+        sqlite = Path("app/user_store.py").read_text()
+        postgres = Path("app/postgres_store.py").read_text()
+        pattern = r"CREATE TABLE IF NOT EXISTS (\w+)"
+        self.assertEqual(
+            set(re.findall(pattern, sqlite)), set(re.findall(pattern, postgres))
+        )
+
+    def test_the_migration_covers_every_table(self):
+        import re
+
+        from app.migrate_storage import TABLES
+
+        tables = set(re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)",
+                                Path("app/user_store.py").read_text()))
+        self.assertEqual(tables - set(TABLES), set())
+
+    def test_the_migration_treats_event_payloads_as_encrypted(self):
+        from app.migrate_storage import ENCRYPTED
+
+        self.assertIn("payload", ENCRYPTED.get("native_events", ()))
+
+    def test_opening_an_older_database_adds_the_new_table(self):
+        """Upgrading in place must not need a manual migration step."""
+        import sqlite3
+
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        key = Fernet.generate_key()
+
+        # A database shaped like the previous release: no native_events table.
+        store = UserStore(temp.name, key)
+        with store.db() as db:
+            db.execute("DROP TABLE native_events")
+        with sqlite3.connect(store.path) as db:
+            tables = {row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+        self.assertNotIn("native_events", tables)
+
+        # Reopening creates it, and existing records are untouched.
+        upgraded = UserStore(temp.name, key)
+        upgraded.save_user("alice", {"id": "alice"}, {})
+        provider = NativeCalendarProvider(upgraded, "alice")
+        created = provider.create_event(
+            "After upgrade", local_now() + timedelta(hours=2),
+            local_now() + timedelta(hours=3),
+        )
+        self.assertTrue(created["success"])

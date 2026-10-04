@@ -11,10 +11,11 @@ from pathlib import Path
 from app.postgres_store import PostgresUserStore
 
 TABLES = ('users', 'sessions', 'oauth', 'conversations', 'preferences', 'assignments',
-          'study_sessions', 'reminders_sent', 'usage_counters')
+          'study_sessions', 'reminders_sent', 'usage_counters', 'native_events')
 ENCRYPTED = {'users': ('profile', 'tokens'), 'oauth': ('payload',),
              'conversations': ('title', 'state'), 'preferences': ('payload',),
-             'assignments': ('payload',), 'study_sessions': ('payload',)}
+             'assignments': ('payload',), 'study_sessions': ('payload',),
+             'native_events': ('payload',)}
 
 
 def migrate(source, destination):

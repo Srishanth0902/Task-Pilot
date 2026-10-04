@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/auth/me',route=>route.fulfill({json:{authenticated:true,login_configured:true,user:{id:'test-user',name:'Test User',email:'test@example.com'}}}));
+  await page.route('**/api/calendar/status',route=>route.fulfill({json:{guest:false,google_connected:true,active_provider:'google',active_provider_label:'Google Calendar',available_providers:[{name:'google',label:'Google Calendar',ready:true},{name:'native',label:'Task Pilot calendar',ready:true}]}}));
   await page.route('**/api/conversations',route=>route.fulfill({json:[]}));
   await page.route("**/api/health", (route) =>
     route.fulfill({

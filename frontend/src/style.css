@@ -524,3 +524,53 @@ dialog label { display: grid; gap: 6px; color: var(--text-secondary); font-size:
   color: var(--text);
   border-color: var(--text-tertiary);
 }
+
+/* ---- calendar choice ----------------------------------------------------
+   The entry screen offers Google and the native calendar side by side; in the
+   app the active one is always named, and switching is one click away. */
+.auth-choices { display: flex; flex-direction: column; gap: 10px; width: 100%; }
+.auth-action.secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.auth-action.secondary:hover { border-color: var(--text-tertiary); }
+.auth-note { line-height: 1.5; }
+
+.calendar-switch {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0 0;
+}
+.calendar-switch-label {
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  width: 100%;
+}
+.calendar-switch button {
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+.calendar-switch button.selected {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.calendar-switch button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.guest-note {
+  margin: 8px 0 0;
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+.guest-note a { color: var(--accent); }

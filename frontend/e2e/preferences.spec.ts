@@ -2,6 +2,7 @@ import {test,expect} from '@playwright/test';
 
 test.beforeEach(async({page})=>{
   await page.route('**/api/auth/me',r=>r.fulfill({json:{authenticated:true,user:{id:'alice',name:'Alice',email:'alice@example.com'}}}));
+  await page.route('**/api/calendar/status',route=>route.fulfill({json:{guest:false,google_connected:true,active_provider:'google',active_provider_label:'Google Calendar',available_providers:[{name:'google',label:'Google Calendar',ready:true},{name:'native',label:'Task Pilot calendar',ready:true}]}}));
   await page.route('**/api/events?*',r=>r.fulfill({json:{success:true,events:[]}}));
   await page.route('**/api/health',r=>r.fulfill({json:{status:'ok',timezone:'Asia/Kolkata'}}));
   await page.route('**/api/conversations',r=>r.fulfill({json:[]}));
