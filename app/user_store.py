@@ -45,6 +45,7 @@ class UserStore:
                 CREATE INDEX IF NOT EXISTS study_owner ON study_sessions(user_id, start);
                 CREATE TABLE IF NOT EXISTS reminders_sent (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, sent REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS reminder_age ON reminders_sent(sent);
+                CREATE TABLE IF NOT EXISTS usage_counters (id TEXT PRIMARY KEY, used INTEGER NOT NULL, expires REAL NOT NULL);
             ''')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(conversations)')}
             if 'title' not in columns:
@@ -302,6 +303,28 @@ class UserStore:
                 (digest(user_id + ':' + key), user_id, now),
             )
         return cursor.rowcount == 1
+
+    def consume_limits(self, limits, now=None):
+        """Atomically reserve all fixed-window budgets, or reserve none.
+
+        Each entry is (scope, limit, window_seconds). The persisted counters
+        survive restarts and never contain messages, tokens, or email addresses.
+        """
+        now = time.time() if now is None else now
+        buckets = [(digest(scope + ':' + str(int(now // window))), maximum,
+                    (int(now // window) + 1) * window)
+                   for scope, maximum, window in limits]
+        with self.lock('usage', 'budgets'):
+            with self.db() as db:
+                db.execute('DELETE FROM usage_counters WHERE expires<=?', (now,))
+                for identity, maximum, expires in buckets:
+                    row = db.execute('SELECT used FROM usage_counters WHERE id=?', (identity,)).fetchone()
+                    if row and row['used'] >= maximum:
+                        return max(1, int(expires - now) + 1)
+                for identity, _, expires in buckets:
+                    db.execute('INSERT INTO usage_counters VALUES (?,1,?) ON CONFLICT(id) '
+                               'DO UPDATE SET used=usage_counters.used+1', (identity, expires))
+        return 0
 
     # ---- study sessions -------------------------------------------------
 

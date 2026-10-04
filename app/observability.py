@@ -26,6 +26,10 @@ _SENSITIVE_KEYS = {
     "password",
     "refresh_token",
     "token",
+    "database_url",
+    "brevo_api_key",
+    "reminder_trigger_secret",
+    "token_encryption_key",
 }
 _SECRET_PATTERNS = (
     re.compile(r"sk-or-v1-[A-Za-z0-9_-]+"),

@@ -240,7 +240,9 @@ schedules only the effort that remains.
 | `WORKDAY_START_HOUR` | `8` | Free-slot search start |
 | `WORKDAY_END_HOUR` | `21` | Free-slot search end |
 | `OPENROUTER_API_KEY` | none | OpenRouter secret key |
-| `OPENROUTER_MODEL` | `qwen/qwen3-30b-a3b` | Switchable model slug |
+| `OPENROUTER_MODEL` | `qwen/qwen3.8-27b:free` | Switchable free-model slug |
+| `OPENROUTER_FREE_ONLY` | `true` | Reject paid model IDs and require zero-price providers |
+| `DATABASE_URL` | empty (local SQLite) | Cloud PostgreSQL URL; required in free deployment mode |
 | `OPENROUTER_BASE_URL` | OpenRouter API | OpenAI-compatible endpoint |
 | `API_HOST` | `127.0.0.1` | FastAPI bind address |
 | `API_PORT` | `8000` | FastAPI port |
@@ -443,6 +445,17 @@ sanitized image under `docs/screenshots/` when preparing a public demo.
 
 ## Deployment
 
+For the **zero-subscription pilot**, use [Free hosting preparation](deployment/FREE_HOSTING.md).
+The prepared Render Free Blueprint serves the frontend and API from one origin,
+uses Neon PostgreSQL for durable encrypted records, Brevo HTTPS for email, and a
+disabled-until-enabled GitHub reminder schedule. It includes persistent usage
+limits and an OpenRouter free-only price guard. It does not create provider
+accounts, deploy the app, or configure Google's public callback automatically.
+The combined production package is tested with `python scripts/verify_deployment.py --build`
+(Docker required). It exercises the real entrypoint, TLS PostgreSQL, compiled
+frontend assets, protected API routes, callback URL, restart persistence, and
+storage-failure readiness; CI runs the same check before auto-deployment.
+
 For deployment preparation without publishing, see [When ready](deployment/WHEN_READY.md).
 The production Compose file is separate from local development and leaves your
 domain and secrets unset until you choose a host.
@@ -460,7 +473,9 @@ See `deployment/README.md` for secret-storage and OAuth limitations.
 The web API supports separate Google accounts, explicit account switching,
 30-day renewable logins, and encrypted persistent storage on one host. Use HTTPS
 and an externally managed encryption key when deploying.
-Multi-host deployment still requires replacing SQLite and local file locks.
+Setting `DATABASE_URL` selects PostgreSQL persistence and transaction advisory
+locks; local development retains SQLite and file locks. The free deployment
+configuration runs one web service, not a multi-instance high-availability cluster.
 
 ## Conversation regression coverage
 
@@ -499,8 +514,8 @@ uses model credits but never contacts Google Calendar.
 
 ## Future improvements
 
-- Move the single-host SQLite store and file locks to PostgreSQL for multiple hosts.
+- Add high-availability deployment and automated encrypted backup/restore checks.
 - Run the evaluation dataset automatically against configured model versions.
 - Add recurring-event editing and attendee management.
-- Add rate limiting, authentication, and distributed tracing for public use.
-- Migrate the frontend to React if richer calendar visualization is required.
+- Extend abuse controls and add distributed tracing for broader public use.
+- Expand the React frontend's calendar visualization.

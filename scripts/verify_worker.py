@@ -131,11 +131,18 @@ def main() -> int:
                    cwd=FRONTEND, timeout=600,
                    unavailable=None if browser_ok else "Playwright browser is unavailable")
 
-            for image, dockerfile in (("api", "Dockerfile.api"), ("web", "Dockerfile.web")):
-                record(f"docker_{image}_build",
+            render_built = False
+            for image, dockerfile in (("api", "Dockerfile.api"), ("web", "Dockerfile.web"),
+                                     ("render", "Dockerfile.render")):
+                built = record(f"docker_{image}_build",
                        [docker, "build", "--file", dockerfile, "--tag", f"task-pilot-{image}:worker", "."]
                        if docker else None, timeout=1200,
                        unavailable=None if docker_ok else "Docker engine is unavailable; verify in CI")
+                if image == "render":
+                    render_built = built
+            record("production_image_smoke", [str(PYTHON), "scripts/verify_deployment.py", "--image", "task-pilot-render:worker"],
+                   timeout=600, unavailable=None if deps_ok and docker_ok and render_built else
+                   "Requires Python dependencies, Docker engine, and a successfully built Render image")
 
     destination = RESULTS / "report.json"
     destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

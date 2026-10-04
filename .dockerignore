@@ -5,6 +5,10 @@ __pycache__
 *.py[cod]
 .env
 .env.production
+.env.free
+.venv-live
+tmp
+output
 credentials.json
 token.json
 credentials.web.json

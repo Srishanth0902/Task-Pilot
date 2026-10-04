@@ -1,8 +1,8 @@
 """Email reminders for upcoming events and assignment deadlines.
 
 The sweep is split from the transport on purpose: ``due_reminders`` decides
-what should go out and is a pure function, while ``SmtpMailer`` is the only
-piece that touches the network. Tests drive the whole pipeline through a
+what should go out and is a pure function, while mail transports are the only
+pieces that touch the network. Tests drive the whole pipeline through a
 recording mailer, so reminder logic is verified without an SMTP server.
 
 Each reminder is claimed in the database before it is sent, so a sweep that
@@ -12,6 +12,8 @@ runs twice — or two processes sweeping at once — cannot double-send.
 import os
 import smtplib
 import ssl
+import time
+import requests
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 
@@ -67,6 +69,42 @@ class SmtpMailer:
         return True
 
 
+class BrevoMailer:
+    """HTTPS transport for hosts that block SMTP. Never retries a send."""
+    def __init__(self, api_key=None, sender=None):
+        self.api_key = api_key if api_key is not None else os.getenv('BREVO_API_KEY', '').strip()
+        self.sender = sender if sender is not None else os.getenv('EMAIL_SENDER', '').strip()
+
+    @property
+    def configured(self):
+        return bool(self.api_key and self.sender and '@' in self.sender)
+
+    def send(self, to, subject, body):
+        if not self.configured:
+            raise RuntimeError('Email reminders require BREVO_API_KEY and a verified EMAIL_SENDER.')
+        try:
+            response = requests.post('https://api.brevo.com/v3/smtp/email',
+                headers={'api-key': self.api_key, 'Accept': 'application/json'},
+                json={'sender': {'name': 'Task Pilot', 'email': self.sender},
+                      'to': [{'email': to}], 'subject': subject, 'textContent': body}, timeout=20)
+        except requests.RequestException:
+            raise RuntimeError('Email delivery could not be confirmed; inspect the provider dashboard.') from None
+        if response.status_code != 201:
+            raise RuntimeError('Email provider rejected delivery; inspect the provider dashboard.')
+        return True
+
+
+def create_mailer():
+    provider = os.getenv('EMAIL_PROVIDER', 'smtp').strip().lower()
+    if os.getenv('DEPLOYMENT_MODE') == 'free' and provider != 'brevo':
+        raise ValueError('Free hosting requires EMAIL_PROVIDER=brevo; SMTP is unavailable on Render Free.')
+    if provider == 'brevo':
+        return BrevoMailer()
+    if provider == 'smtp':
+        return SmtpMailer()
+    raise ValueError('EMAIL_PROVIDER must be smtp or brevo.')
+
+
 def _lead_times(preferences, key, fallback):
     values = (preferences or {}).get(key)
     if not values:
@@ -99,7 +137,7 @@ def due_reminders(events, assignments, *, now=None, preferences=None,
             if send_at <= moment <= send_at + cutoff and begins > moment:
                 pending.append({
                     "kind": "event",
-                    "key": f"event:{event.get('event_id')}:{lead}",
+                    "key": f"event:{event.get('event_id')}:{begins.isoformat()}:{lead}",
                     "lead_minutes": lead,
                     "title": event.get("title") or "Untitled event",
                     "when": begins,
@@ -120,7 +158,7 @@ def due_reminders(events, assignments, *, now=None, preferences=None,
             if send_at <= moment <= send_at + cutoff and deadline > moment:
                 pending.append({
                     "kind": "deadline",
-                    "key": f"deadline:{work.get('id')}:{lead}",
+                    "key": f"deadline:{work.get('id')}:{deadline.isoformat()}:{lead}",
                     "lead_minutes": lead,
                     "title": work.get("title") or "Untitled assignment",
                     "when": deadline,
@@ -178,7 +216,7 @@ class ReminderService:
 
     def __init__(self, store, mailer=None, event_reader=None):
         self.store = store
-        self.mailer = mailer or SmtpMailer()
+        self.mailer = mailer or create_mailer()
         # Injected so the sweep can run without a live Google connection.
         self.event_reader = event_reader
 
@@ -211,12 +249,21 @@ class ReminderService:
                 continue
 
             reminders = due_reminders(
-                self._events(user_id),
+                self._events(user_id, horizon_hours=max(_lead_times(preferences, 'event_reminder_minutes', DEFAULT_EVENT_LEADS)) / 60 + 3),
                 self.store.assignments(user_id, include_done=False),
                 now=moment,
                 preferences=preferences,
             )
             for reminder in reminders:
+                from app.usage import positive_limit
+                # Reserve the provider's daily allowance before claiming or
+                # sending. Failures still count, since delivery may be uncertain.
+                wait = self.store.consume_limits([
+                    ('email:global:day', positive_limit('EMAIL_REQUESTS_PER_DAY', 250), 86400),
+                    ('email:user:' + user_id, positive_limit('EMAIL_USER_REQUESTS_PER_DAY', 20), 86400),
+                ]) if not self._already_claimed(user_id, reminder['key']) else -1
+                if wait:
+                    continue
                 # Claim first: if the send then fails we do not retry, which is
                 # the right trade for reminders. A duplicate is worse than a
                 # miss, and the next lead time still catches the user.
@@ -229,3 +276,9 @@ class ReminderService:
                 except Exception:
                     failed += 1
         return {"sent": sent, "failed": failed, "skipped_accounts": skipped}
+
+    def _already_claimed(self, user_id, key):
+        from app.user_store import digest
+        with self.store.db() as db:
+            return db.execute('SELECT id FROM reminders_sent WHERE id=? AND sent>?',
+                              (digest(user_id + ':' + key), time.time() - 30 * 86400)).fetchone() is not None

@@ -9,7 +9,8 @@ COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-RUN useradd --create-home taskpilot \
+RUN groupadd --gid 1000 taskpilot \
+    && useradd --uid 1000 --gid 1000 --create-home taskpilot \
     && mkdir -p /app/logs /app/data \
     && chown -R taskpilot:taskpilot /app
 

@@ -57,7 +57,7 @@ class DueReminderTests(unittest.TestCase):
     def test_event_reminder_fires_at_its_lead_time(self):
         start = self.now + timedelta(minutes=60)
         found = due_reminders([_event("e1", "Stand-up", start)], [], now=self.now)
-        self.assertEqual([r["key"] for r in found], ["event:e1:60"])
+        self.assertEqual([r["key"] for r in found], [f"event:e1:{start.isoformat()}:60"])
 
     def test_nothing_fires_too_early(self):
         start = self.now + timedelta(hours=10)
@@ -99,7 +99,14 @@ class DueReminderTests(unittest.TestCase):
         due = (self.now + timedelta(minutes=24 * 60)).isoformat()
         work = [{"id": "a1", "title": "Essay", "due": due, "status": "todo"}]
         found = due_reminders([], work, now=self.now)
-        self.assertEqual([r["key"] for r in found], ["deadline:a1:1440"])
+        self.assertEqual([r["key"] for r in found], [f"deadline:a1:{due}:1440"])
+
+    def test_rescheduling_changes_reminder_identity(self):
+        first = self.now + timedelta(minutes=60)
+        second = first + timedelta(days=1)
+        original = due_reminders([_event('e1', 'Study', first)], [], now=self.now)
+        moved = due_reminders([_event('e1', 'Study', second)], [], now=self.now + timedelta(days=1))
+        self.assertNotEqual(original[0]['key'], moved[0]['key'])
 
     def test_finished_assignments_do_not_remind(self):
         due = (self.now + timedelta(minutes=24 * 60)).isoformat()

@@ -6,6 +6,7 @@ the calendar agent. Only configuration belongs in this module; calendar logic
 remains provider-independent.
 """
 
+import os
 from langchain_openai import ChatOpenAI
 
 from app.config import (
@@ -36,12 +37,20 @@ def create_openrouter_model(
     if not resolved_model:
         raise ValueError("OPENROUTER_MODEL cannot be empty.")
 
+    free_only = os.getenv('OPENROUTER_FREE_ONLY', 'true').lower() not in {'false', '0', 'no'}
+    if free_only and resolved_model != 'openrouter/free' and not resolved_model.endswith(':free'):
+        raise ValueError('Free mode requires openrouter/free or a model with a :free variant.')
+
     return ChatOpenAI(
         model=resolved_model,
         api_key=resolved_key,
         base_url=OPENROUTER_BASE_URL,
         temperature=temperature,
         default_headers={"X-Title": "Task Pilot"},
-        max_retries=2,
+        # Do not spend several reservations on implicit HTTP retries. A failed
+        # planner call is reported; no paid model fallback is configured.
+        max_retries=0 if free_only else 2,
+        extra_body={'provider': {'require_parameters': True,
+                                'max_price': {'prompt': 0, 'completion': 0}}} if free_only else {},
         timeout=60,
     )

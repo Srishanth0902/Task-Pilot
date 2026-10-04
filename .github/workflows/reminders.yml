@@ -1,0 +1,25 @@
+name: Scheduled reminders
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '7,37 * * * *'
+permissions:
+  contents: read
+concurrency:
+  group: scheduled-reminders
+  cancel-in-progress: false
+jobs:
+  remind:
+    # Remains disabled until the owner explicitly enables it after deployment.
+    if: vars.ENABLE_SCHEDULED_REMINDERS == 'true' && vars.TASK_PILOT_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python scripts/trigger_reminders.py
+        env:
+          TASK_PILOT_URL: ${{ vars.TASK_PILOT_URL }}
+          REMINDER_TRIGGER_SECRET: ${{ secrets.REMINDER_TRIGGER_SECRET }}

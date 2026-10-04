@@ -1,0 +1,22 @@
+FROM node:24-alpine AS frontend
+WORKDIR /web
+COPY frontend/package*.json ./
+RUN npm ci
+COPY frontend/ ./
+RUN npm run build
+
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+WORKDIR /app
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY app/ ./app/
+COPY --from=frontend /web/dist ./frontend/dist/
+# Render runtime secret files are readable by group 1000. Be explicit so
+# Google's credentials file remains accessible without running as root.
+RUN groupadd --gid 1000 taskpilot && useradd --uid 1000 --gid 1000 --create-home taskpilot \
+    && mkdir -p logs && chown -R taskpilot:taskpilot /app
+USER taskpilot
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=15s --start-period=90s --retries=3 CMD python -c "import os,urllib.request; urllib.request.urlopen('http://127.0.0.1:'+os.getenv('PORT','8000')+'/api/ready', timeout=12)"
+CMD ["python", "-m", "app.serve"]

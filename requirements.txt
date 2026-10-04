@@ -26,6 +26,7 @@ httpx==0.28.1
 requests==2.34.2
 cryptography==50.0.1
 filelock==3.32.0
+psycopg[binary]==3.2.13
 
 # IANA timezone database for Windows and other systems without OS tzdata.
 tzdata==2026.2

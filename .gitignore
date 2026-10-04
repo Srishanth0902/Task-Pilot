@@ -1,6 +1,7 @@
 # ---- Secrets: never commit these ----
 .env
 .env.production
+.env.free
 credentials.json
 token.json
 credentials.web.json

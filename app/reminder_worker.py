@@ -11,14 +11,12 @@ claimed in the database before it is sent, so only one sweep can win.
 
 import argparse
 import logging
-import os
 import sys
 import time
 
-from app.config import PROJECT_ROOT
 from app.date_utils import local_now
-from app.reminders import ReminderService, SmtpMailer
-from app.user_store import UserStore
+from app.reminders import ReminderService, create_mailer
+from app.storage import create_store
 
 log = logging.getLogger("task_pilot.reminders")
 
@@ -45,12 +43,9 @@ def calendar_reader(runtime):
 def build_service(store=None, mailer=None, with_calendar=True):
     from app.multiuser import UserRuntime
 
-    store = store or UserStore(
-        os.getenv("DATA_DIRECTORY", str(PROJECT_ROOT / "data")),
-        os.getenv("TOKEN_ENCRYPTION_KEY"),
-    )
+    store = store or create_store()
     reader = calendar_reader(UserRuntime(store)) if with_calendar else None
-    return ReminderService(store, mailer or SmtpMailer(), event_reader=reader)
+    return ReminderService(store, mailer or create_mailer(), event_reader=reader)
 
 
 def main(argv=None):
@@ -67,8 +62,7 @@ def main(argv=None):
 
     if not service.mailer.configured:
         print(
-            "SMTP is not configured. Set SMTP_HOST and SMTP_SENDER (and usually "
-            "SMTP_USERNAME/SMTP_PASSWORD) before running the reminder worker.",
+            "Email is not configured. Set the credentials for EMAIL_PROVIDER before running the worker.",
             file=sys.stderr,
         )
         return 1

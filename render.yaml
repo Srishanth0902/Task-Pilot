@@ -1,0 +1,49 @@
+# Preparation only: no service is created until you import this Blueprint.
+# All compute uses Free. Neon and Brevo accounts are connected manually.
+services:
+  - type: web
+    name: task-pilot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.render
+    healthCheckPath: /api/ready
+    autoDeployTrigger: checksPass
+    envVars:
+      - key: DEPLOYMENT_MODE
+        value: free
+      - key: PUBLIC_APP_URL
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
+      - key: GOOGLE_WEB_CREDENTIALS_FILE
+        value: /etc/secrets/credentials.web.json
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: qwen/qwen3.8-27b:free
+      - key: OPENROUTER_FREE_ONLY
+        value: "true"
+      - key: EMAIL_PROVIDER
+        value: brevo
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_SENDER
+        sync: false
+      - key: REMINDER_TRIGGER_SECRET
+        generateValue: true
+      - key: LOG_PRIVATE_CONTENT
+        value: "false"
+      - key: AI_REQUESTS_PER_DAY
+        value: "40"
+      - key: AI_USER_REQUESTS_PER_DAY
+        value: "10"
+      - key: AI_REQUESTS_PER_MINUTE
+        value: "10"
+      - key: CHAT_REQUESTS_PER_MINUTE
+        value: "20"
+      - key: EMAIL_REQUESTS_PER_DAY
+        value: "250"
+      - key: EMAIL_USER_REQUESTS_PER_DAY
+        value: "20"

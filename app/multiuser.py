@@ -21,11 +21,12 @@ from app.calendar_service import get_events
 from app.date_utils import coerce_datetime, local_now
 from app.graph_agent import CalendarConversation
 from app.llm import create_openrouter_model
-from app.user_store import UserStore
+from app.storage import create_store
+from app.usage import BudgetedModel, chat_allowance
 from app.preferences import SchedulingPreferences
 from app.assignments import Assignment
 from app.study_planner import plan_sessions, progress, unschedulable
-from app.reminders import SmtpMailer
+from app.reminders import create_mailer, ReminderService
 from app.calendar_export import to_csv, to_ics
 
 COOKIE = 'task_pilot_session'
@@ -76,7 +77,8 @@ class UserRuntime:
             self.store.name_conversation(user_id, thread_id, message)
             service = self.service(user_id)
             try:
-                chat = CalendarConversation(self.model_factory(), service, preferences=self.store.preferences(user_id))
+                chat = CalendarConversation(BudgetedModel(self.model_factory, self.store, user_id), service,
+                                            preferences=self.store.preferences(user_id))
                 if saved:
                     saved['messages'] = messages_from_dict(saved.get('messages', []))
                     chat.graph.update_state({'configurable': {'thread_id': thread_id}}, saved)
@@ -101,7 +103,7 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
     key = os.getenv('TOKEN_ENCRYPTION_KEY')
     if secure and not key and store is None:
         raise ValueError('TOKEN_ENCRYPTION_KEY is required for deployment')
-    store = store or UserStore(os.getenv('DATA_DIRECTORY', str(PROJECT_ROOT / 'data')), key)
+    store = store or create_store()
     runtime = runtime or UserRuntime(store)
     oauth_file = Path(oauth_file or os.getenv('GOOGLE_WEB_CREDENTIALS_FILE', str(PROJECT_ROOT / 'credentials.web.json')))
     redirect_uri = origin + '/api/auth/callback'
@@ -147,7 +149,18 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
         return {'status': 'ok', 'service':'task-pilot', 'model':OPENROUTER_MODEL, 'timezone':TIMEZONE,
                 'openrouter_configured': bool(OPENROUTER_API_KEY), 'google_credentials_configured':oauth_file.exists(),
                 'google_token_configured':False, 'authentication_required':True,
-                'email_reminders_configured': SmtpMailer().configured}
+                'email_reminders_configured': create_mailer().configured}
+
+    @app.get('/ready')
+    def ready():
+        # The host must not route users to a service whose durable DB is down.
+        # This deliberately avoids provider calls or any private account data.
+        try:
+            with store.db() as db:
+                db.execute('SELECT 1 FROM users LIMIT 1').fetchone()
+        except Exception:
+            raise HTTPException(503, 'Persistent storage is temporarily unavailable.') from None
+        return {'status': 'ready'}
 
     @app.get('/auth/me')
     def me(request: Request):
@@ -156,7 +169,9 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
                 'login_configured':oauth_file.exists()}
 
     @app.get('/auth/login')
-    def login():
+    def login(request: Request):
+        if store.consume_limits([('login:' + (request.client.host if request.client else 'unknown'), 10, 60)]):
+            raise HTTPException(429, 'Too many sign-in attempts. Try again shortly.', headers={'Retry-After': '60'})
         nonce, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(64)
         oauth = flow(code_verifier=verifier)
         state = store.oauth_start({'nonce':nonce, 'verifier':verifier})
@@ -192,6 +207,9 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
             if claims.get('nonce') != pending['nonce'] or not claims.get('email_verified') or not claims.get('sub'):
                 raise ValueError('Invalid identity')
             user_id = claims['sub']
+            allowed = {value.strip().casefold() for value in os.getenv('ALLOWED_GOOGLE_EMAILS', '').split(',') if value.strip()}
+            if allowed and claims['email'].casefold() not in allowed:
+                raise ValueError('This account is not invited to this pilot')
             with store.lock('tokens', user_id):
                 tokens = json.loads(oauth.credentials.to_json())
                 if not tokens.get('refresh_token'):
@@ -252,6 +270,7 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
 
     @app.post('/chat', response_model=ChatResponse)
     def chat(body: ChatRequest, user_id=Depends(current_user)):
+        chat_allowance(store, user_id)
         thread_id = body.thread_id or str(uuid.uuid4())
         try:
             return _chat_response(runtime.chat(user_id,thread_id,body.message),thread_id)
@@ -374,4 +393,24 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
         finally:
             if hasattr(service,'close'):
                 service.close()
+    @app.post('/internal/reminders', include_in_schema=False)
+    def scheduled_reminders(request: Request):
+        secret = os.getenv('REMINDER_TRIGGER_SECRET', '')
+        if len(secret) < 32:
+            raise HTTPException(503, 'Scheduled reminders are not configured.')
+        supplied = request.headers.get('authorization', '')
+        if not secrets.compare_digest(supplied, 'Bearer ' + secret):
+            raise HTTPException(401, 'Invalid scheduler credentials.')
+        from app.reminder_worker import calendar_reader
+        mailer = create_mailer()
+        if not mailer.configured:
+            raise HTTPException(503, 'Email delivery is not configured.')
+        # Lock and budget span hosts; overlapping or repeated scheduler calls
+        # cannot duplicate delivery or flood Google with calendar reads.
+        with store.lock('reminders', 'sweep'):
+            wait = store.consume_limits([('reminder:sweep', 1, 600)])
+            if wait:
+                return {'sent': 0, 'failed': 0, 'skipped_accounts': 0, 'already_checked': True}
+            return ReminderService(store, mailer, calendar_reader(runtime)).sweep()
+
     return app
