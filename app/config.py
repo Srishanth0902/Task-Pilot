@@ -64,6 +64,7 @@ LOG_FILE = _resolve(os.getenv("LOG_FILE", "logs/task_pilot.jsonl"))
 LOG_MAX_BYTES = int(os.getenv("LOG_MAX_BYTES", "2000000"))
 LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "3"))
 
-# Full calendar access: later weeks need to update and delete events, and
-# widening the scope after the fact would force every user to consent again.
-SCOPES = ["https://www.googleapis.com/auth/calendar"]
+# Desktop CLI also reads the calendar's title; it does not need permission
+# to create/delete calendars or change sharing settings.
+SCOPES = ["https://www.googleapis.com/auth/calendar.events",
+          "https://www.googleapis.com/auth/calendar.calendars.readonly"]

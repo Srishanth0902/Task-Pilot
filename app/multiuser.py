@@ -30,7 +30,8 @@ from app.reminders import create_mailer, ReminderService
 from app.calendar_export import to_csv, to_ics
 
 COOKIE = 'task_pilot_session'
-SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', 'https://www.googleapis.com/auth/calendar']
+CALENDAR_EVENT_SCOPE = 'https://www.googleapis.com/auth/calendar.events'
+SCOPES = ['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile', CALENDAR_EVENT_SCOPE]
 
 
 def _session_max_age(value=None):
@@ -180,7 +181,10 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
             nonce=nonce,
             access_type='offline',
             prompt='select_account consent',
-            include_granted_scopes='true',
+            # Request only this client's current scopes, rather than merging
+            # historical broad-calendar or desktop metadata grants into a
+            # new web login token.
+            include_granted_scopes='false',
             code_challenge_method='S256',
         )
         response = RedirectResponse(url)
@@ -201,7 +205,7 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
             granted = oauth.oauth2session.token.get('scope', [])
             if isinstance(granted, str):
                 granted = granted.split()
-            if 'https://www.googleapis.com/auth/calendar' not in granted:
+            if CALENDAR_EVENT_SCOPE not in granted:
                 raise ValueError('Calendar access not granted')
             claims = id_token.verify_oauth2_token(oauth.credentials.id_token, GoogleRequest(), oauth.client_config['client_id'])
             if claims.get('nonce') != pending['nonce'] or not claims.get('email_verified') or not claims.get('sub'):

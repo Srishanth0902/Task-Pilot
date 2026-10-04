@@ -26,6 +26,11 @@ claim that the application has passed Google's verification.
 6. In Data Access, accurately register the scopes actually requested in
    `app/multiuser.py`. Justify Calendar access for search/create/update/delete,
    conflict detection and requested rescheduling. Do not request Gmail access.
+   Web login requests `openid`, `userinfo.email`, `userinfo.profile` and
+   `calendar.events`. The desktop CLI additionally requests
+   `calendar.calendars.readonly` only to show the calendar title. It does not
+   request the broad `calendar` scope. Existing tokens may retain earlier
+   grants; changing the requested scopes does not retroactively revoke them.
 7. Submit Google's verification form after completing ownership proof and a demo
    showing consent, the real OAuth client and calendar functionality. Use
    synthetic events, not private calendar/chat content in the public demo.

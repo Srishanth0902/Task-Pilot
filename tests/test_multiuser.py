@@ -151,7 +151,7 @@ class MultiuserTests(unittest.TestCase):
         oauth.client_config={'client_id':'test-client'}
         oauth.credentials.id_token='signed-id-token'
         oauth.credentials.to_json.return_value=json.dumps({'refresh_token':'new-secret'})
-        oauth.oauth2session.token={'scope':'openid https://www.googleapis.com/auth/calendar'}
+        oauth.oauth2session.token={'scope':'openid https://www.googleapis.com/auth/calendar.events'}
         state=self.store.oauth_start({'nonce':'nonce','verifier':'verifier'})
         client.cookies.set('task_pilot_oauth',state)
         with patch('app.multiuser.Flow.from_client_config',return_value=oauth), patch('app.multiuser.id_token.verify_oauth2_token',return_value={'sub':'carol','email':'carol@example.com','name':'Carol','picture':'https://example.com/carol.jpg','email_verified':True,'nonce':'nonce'}) as verify:
@@ -169,13 +169,17 @@ class MultiuserTests(unittest.TestCase):
         client=TestClient(create_multiuser_app(self.store,self.runtime,oauth_file=oauth_file))
         oauth=Mock()
         oauth.authorization_url.return_value=('https://accounts.google.com/o/oauth2/auth','state')
-        with patch('app.multiuser.Flow.from_client_config',return_value=oauth):
+        with patch('app.multiuser.Flow.from_client_config',return_value=oauth) as build_flow:
             response=client.get('/auth/login',follow_redirects=False)
         self.assertEqual(response.status_code,307)
         oauth.authorization_url.assert_called_once()
         options=oauth.authorization_url.call_args.kwargs
         self.assertEqual(options['prompt'],'select_account consent')
         self.assertEqual(options['access_type'],'offline')
+        self.assertEqual(options['include_granted_scopes'],'false')
+        requested = build_flow.call_args.kwargs['scopes']
+        self.assertIn('https://www.googleapis.com/auth/calendar.events', requested)
+        self.assertNotIn('https://www.googleapis.com/auth/calendar', requested)
 
     def test_google_callback_rejects_wrong_nonce(self):
         oauth_file=Path(self.temp.name)/'web.json'
@@ -183,13 +187,29 @@ class MultiuserTests(unittest.TestCase):
         client=TestClient(create_multiuser_app(self.store,self.runtime,oauth_file=oauth_file))
         oauth=Mock()
         oauth.client_config={'client_id':'test-client'}
-        oauth.oauth2session.token={'scope':'https://www.googleapis.com/auth/calendar'}
+        oauth.oauth2session.token={'scope':'https://www.googleapis.com/auth/calendar.events'}
         state=self.store.oauth_start({'nonce':'expected','verifier':'verifier'})
         client.cookies.set('task_pilot_oauth',state)
         with patch('app.multiuser.Flow.from_client_config',return_value=oauth), patch('app.multiuser.id_token.verify_oauth2_token',return_value={'sub':'attacker','email_verified':True,'nonce':'wrong'}):
             response=client.get('/auth/callback',params={'state':state,'code':'code'})
         self.assertEqual(response.status_code,400)
         self.assertFalse(client.get('/auth/me').json()['authenticated'])
+
+    def test_google_callback_requires_event_write_permission(self):
+        oauth_file=Path(self.temp.name)/'web.json'
+        oauth_file.write_text(json.dumps({'web':{'client_id':'test-client'}}))
+        client=TestClient(create_multiuser_app(self.store,self.runtime,oauth_file=oauth_file))
+        for granted in ['openid', 'https://www.googleapis.com/auth/calendar.events.readonly']:
+            with self.subTest(granted=granted):
+                oauth=Mock()
+                oauth.oauth2session.token={'scope':granted}
+                state=self.store.oauth_start({'nonce':'nonce','verifier':'verifier'})
+                client.cookies.set('task_pilot_oauth',state)
+                with patch('app.multiuser.Flow.from_client_config',return_value=oauth), patch('app.multiuser.id_token.verify_oauth2_token') as verify:
+                    response=client.get('/auth/callback',params={'state':state,'code':'code'})
+                self.assertEqual(response.status_code,400)
+                verify.assert_not_called()
+                self.assertFalse(client.get('/auth/me').json()['authenticated'])
 
     def test_independent_conversation_runs_while_another_waits(self):
         entered,release=threading.Event(),threading.Event()
