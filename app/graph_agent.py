@@ -21,7 +21,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
-from app.calendar_tools import build_calendar_tools
+from app.calendar_tools import as_provider, build_calendar_tools
 from app.config import TIMEZONE, WORKDAY_END_HOUR, WORKDAY_START_HOUR
 from app.date_utils import (
     ensure_aware,
@@ -613,14 +613,19 @@ def _action_ready(action: dict) -> bool:
 
 
 def create_calendar_graph(model, service, *, checkpointer=None, planner=None, preferences=None):
-    """Compile the stateful Week 3/4 graph around an LLM and calendar service."""
+    """Compile the stateful Week 3/4 graph around an LLM and a calendar provider.
+
+    ``service`` may be a calendar provider or a raw Google client; the latter is
+    wrapped so existing callers and tests keep working unchanged.
+    """
+    provider = as_provider(service)
     if model is None and planner is None:
         raise ValueError("A LangChain-compatible chat model must be supplied.")
 
     structured_planner = planner or model.with_structured_output(
         QueryPlan, method="json_schema", include_raw=True
     )
-    tools = {tool.name: tool for tool in build_calendar_tools(service)}
+    tools = {tool.name: tool for tool in build_calendar_tools(provider)}
     preferences = SchedulingPreferences.model_validate(preferences or {})
 
     def invoke_tool(state: CalendarAgentState, tool_name: str, args: dict):
@@ -1590,9 +1595,7 @@ def create_calendar_graph(model, service, *, checkpointer=None, planner=None, pr
             if intent in {'delete','update'} and preferences.protected_titles:
                 selected = state.get('selected_event') or {}
                 if not selected:
-                    from app.calendar_service import _normalise_event
-                    from app.config import CALENDAR_ID
-                    selected = _normalise_event(service.events().get(calendarId=CALENDAR_ID, eventId=args['event_id']).execute())
+                    selected = provider.get_event(args['event_id']) or {}
                 if preferences.protected(selected.get('title')):
                     return {'error': 'This event is protected in your settings. Nothing was changed.'}
             result = invoke_tool(state, tool_name, args)
@@ -1761,6 +1764,7 @@ class CalendarConversation:
 
     def __init__(self, model, service, *, checkpointer=None, planner=None, preferences=None):
         self.service = service
+        self.provider = as_provider(service)
         self.preferences = SchedulingPreferences.model_validate(preferences or {})
         self.graph = create_calendar_graph(
             model,
@@ -1809,7 +1813,7 @@ class CalendarConversation:
                 try:
                     if self.preferences.protected(record['after'].get('title')):
                         raise ValueError('This event is protected in your settings.')
-                    text = undo_change(self.service, record)
+                    text = undo_change(self.provider, record)
                     clear_record = True
                     undo_success = True
                 except Exception as error:

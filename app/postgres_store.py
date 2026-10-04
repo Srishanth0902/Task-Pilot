@@ -26,6 +26,8 @@ CREATE INDEX IF NOT EXISTS study_owner ON study_sessions(user_id, start);
 CREATE TABLE IF NOT EXISTS reminders_sent (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, sent DOUBLE PRECISION NOT NULL);
 CREATE INDEX IF NOT EXISTS reminder_age ON reminders_sent(sent);
 CREATE TABLE IF NOT EXISTS usage_counters (id TEXT PRIMARY KEY, used INTEGER NOT NULL, expires DOUBLE PRECISION NOT NULL);
+CREATE TABLE IF NOT EXISTS native_events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL, start DOUBLE PRECISION NOT NULL, finish DOUBLE PRECISION NOT NULL, all_day INTEGER DEFAULT 0, status TEXT NOT NULL, version INTEGER NOT NULL, created DOUBLE PRECISION NOT NULL, updated DOUBLE PRECISION NOT NULL);
+CREATE INDEX IF NOT EXISTS native_event_owner ON native_events(user_id, start);
 '''
 
 

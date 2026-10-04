@@ -46,6 +46,8 @@ class UserStore:
                 CREATE TABLE IF NOT EXISTS reminders_sent (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, sent REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS reminder_age ON reminders_sent(sent);
                 CREATE TABLE IF NOT EXISTS usage_counters (id TEXT PRIMARY KEY, used INTEGER NOT NULL, expires REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS native_events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL, start REAL NOT NULL, finish REAL NOT NULL, all_day INTEGER DEFAULT 0, status TEXT NOT NULL, version INTEGER NOT NULL, created REAL NOT NULL, updated REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS native_event_owner ON native_events(user_id, start);
             ''')
             columns = {row['name'] for row in db.execute('PRAGMA table_info(conversations)')}
             if 'title' not in columns:
@@ -406,3 +408,131 @@ class UserStore:
                 (user_id,),
             ).fetchall()
         return {row['assignment_id']: row['total'] for row in rows if row['assignment_id']}
+
+    # ---- native calendar events -----------------------------------------
+    # Event titles, descriptions and locations are personal, so they are
+    # sealed like every other record. Times and status stay in plain columns
+    # because every window query and conflict check runs against them.
+    #
+    # `version` is the native equivalent of a Google etag: it makes undo and
+    # confirmation safe against a concurrent edit using exactly the same
+    # conditional-write rule as the Google path.
+
+    def native_event_record(self, row):
+        from datetime import datetime, timezone
+
+        payload = self.open(row['payload'])
+        zone = timezone.utc
+
+        def moment(value):
+            return datetime.fromtimestamp(value, zone).isoformat()
+
+        return {
+            'event_id': row['id'],
+            'etag': f"native-{row['version']}",
+            'title': payload.get('title', '(no title)'),
+            'start': payload['start_text'] if row['all_day'] else moment(row['start']),
+            'end': payload['end_text'] if row['all_day'] else moment(row['finish']),
+            'description': payload.get('description'),
+            'location': payload.get('location'),
+            # Native events have no Google page; inventing a link would send
+            # the user to a 404.
+            'html_link': None,
+            'status': row['status'],
+            'transparency': payload.get('transparency', 'opaque'),
+            'provider': 'native',
+        }
+
+    def create_native_event(self, user_id, *, title, start, end, description=None,
+                            location=None, all_day=False):
+        now = time.time()
+        identity = 'nat_' + secrets.token_urlsafe(12)
+        payload = {
+            'title': title, 'description': description, 'location': location,
+            'start_text': start.isoformat() if hasattr(start, 'isoformat') else str(start),
+            'end_text': end.isoformat() if hasattr(end, 'isoformat') else str(end),
+        }
+        with self.db() as db:
+            db.execute(
+                'INSERT INTO native_events VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (identity, user_id, self.seal(payload), start.timestamp(), end.timestamp(),
+                 int(bool(all_day)), 'confirmed', 1, now, now),
+            )
+        return self.native_event(user_id, identity)
+
+    def native_event(self, user_id, event_id):
+        with self.db() as db:
+            row = db.execute(
+                'SELECT * FROM native_events WHERE id=? AND user_id=?',
+                (event_id, user_id),
+            ).fetchone()
+        if not row:
+            return None
+        return self.native_event_record(row)
+
+    def native_events(self, user_id, *, time_min=None, time_max=None, max_results=250,
+                      include_cancelled=False):
+        query = 'SELECT * FROM native_events WHERE user_id=?'
+        values = [user_id]
+        if not include_cancelled:
+            query += " AND status!='cancelled'"
+        if time_min is not None:
+            query += ' AND finish>=?'
+            values.append(time_min.timestamp())
+        if time_max is not None:
+            query += ' AND start<=?'
+            values.append(time_max.timestamp())
+        query += ' ORDER BY start LIMIT ?'
+        values.append(int(max_results))
+        with self.db() as db:
+            rows = db.execute(query, tuple(values)).fetchall()
+        return [self.native_event_record(row) for row in rows]
+
+    def update_native_event(self, user_id, event_id, changes, *, if_match=None):
+        """Apply partial changes. Returns None when the event does not exist.
+
+        ``if_match`` is checked inside the same transaction as the write, so a
+        concurrent edit cannot slip between the check and the update.
+        """
+        with self.db() as db:
+            row = db.execute(
+                'SELECT * FROM native_events WHERE id=? AND user_id=?',
+                (event_id, user_id),
+            ).fetchone()
+            if not row:
+                return None
+            if if_match is not None and f"native-{row['version']}" != if_match:
+                raise PermissionError('This event changed after your request.')
+            payload = self.open(row['payload'])
+            start_ts, finish_ts = row['start'], row['finish']
+            for key in ('title', 'description', 'location'):
+                if changes.get(key) is not None:
+                    payload[key] = changes[key]
+            if changes.get('start') is not None:
+                start_ts = changes['start'].timestamp()
+                payload['start_text'] = changes['start'].isoformat()
+            if changes.get('end') is not None:
+                finish_ts = changes['end'].timestamp()
+                payload['end_text'] = changes['end'].isoformat()
+            if finish_ts <= start_ts:
+                raise ValueError('An event must end after it starts.')
+            db.execute(
+                'UPDATE native_events SET payload=?,start=?,finish=?,version=version+1,updated=? '
+                'WHERE id=? AND user_id=?',
+                (self.seal(payload), start_ts, finish_ts, time.time(), event_id, user_id),
+            )
+        return self.native_event(user_id, event_id)
+
+    def delete_native_event(self, user_id, event_id, *, if_match=None):
+        """Remove an event. Returns False when it was already gone."""
+        with self.db() as db:
+            row = db.execute(
+                'SELECT version FROM native_events WHERE id=? AND user_id=?',
+                (event_id, user_id),
+            ).fetchone()
+            if not row:
+                return False
+            if if_match is not None and f"native-{row['version']}" != if_match:
+                raise PermissionError('This event changed after your request.')
+            db.execute('DELETE FROM native_events WHERE id=? AND user_id=?', (event_id, user_id))
+        return True
