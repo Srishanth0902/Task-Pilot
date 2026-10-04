@@ -1,5 +1,7 @@
 """Validated, per-account scheduling preferences."""
 from datetime import timedelta
+from typing import Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 from app.config import WORKDAY_START_HOUR, WORKDAY_END_HOUR
@@ -14,6 +16,12 @@ class SchedulingPreferences(BaseModel):
     study_start: int | None = Field(default=None, ge=0, le=22)
     protected_titles: list[str] = Field(default_factory=list, max_length=30)
     preview_changes: bool = False
+
+    # Which calendar this account works against. Kept with the account's other
+    # settings because it is per-account, already encrypted, and already has
+    # read/write plumbing; it is resolved on the server, never trusted from the
+    # browser. An empty value means "decide from whether Google is connected".
+    calendar_provider: Literal['', 'google', 'native'] = ''
 
     # Email reminders. Lead times are minutes before the event start or the
     # assignment deadline; an empty list falls back to the service defaults.

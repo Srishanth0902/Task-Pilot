@@ -536,3 +536,61 @@ class UserStore:
                 raise PermissionError('This event changed after your request.')
             db.execute('DELETE FROM native_events WHERE id=? AND user_id=?', (event_id, user_id))
         return True
+
+    # ---- which calendar this workspace uses ------------------------------
+
+    def calendar_provider(self, user_id):
+        """The account's explicit calendar choice, or '' when it has none."""
+        return (self.preferences(user_id) or {}).get('calendar_provider', '')
+
+    def set_calendar_provider(self, user_id, name):
+        from app.calendar_provider import GOOGLE, NATIVE
+
+        if name not in {'', GOOGLE, NATIVE}:
+            raise ValueError('Unknown calendar.')
+        current = self.preferences(user_id)
+        current['calendar_provider'] = name
+        return self.save_preferences(user_id, current)
+
+    def active_calendar(self, user_id):
+        """Which calendar this workspace works against.
+
+        The rule lives here, beside the stored choice and the stored
+        credentials, so every caller resolves it the same way: an explicit
+        choice wins, otherwise Google when it is connected and the native
+        calendar when it is not.
+        """
+        from app.calendar_provider import GOOGLE, NATIVE
+
+        chosen = self.calendar_provider(user_id)
+        if chosen in (GOOGLE, NATIVE):
+            return chosen
+        return GOOGLE if self.google_connected(user_id) else NATIVE
+
+    def google_connected(self, user_id):
+        """True when this workspace has usable Google credentials stored."""
+        try:
+            _, tokens = self.user(user_id)
+        except KeyError:
+            return False
+        return bool((tokens or {}).get('refresh_token'))
+
+    def create_guest(self):
+        """Make a fresh guest workspace with its own opaque identity.
+
+        Every guest gets a distinct workspace id, never a shared anonymous
+        account, so one guest's calendar is as isolated from another's as two
+        signed-in users are.
+        """
+        user_id = 'guest_' + secrets.token_urlsafe(18)
+        self.save_user(user_id, {'id': user_id, 'kind': 'guest', 'name': 'Guest',
+                                 'email': '', 'picture': None}, {})
+        self.set_calendar_provider(user_id, 'native')
+        return user_id
+
+    def is_guest(self, user_id):
+        try:
+            profile, _ = self.user(user_id)
+        except KeyError:
+            return False
+        return (profile or {}).get('kind') == 'guest'

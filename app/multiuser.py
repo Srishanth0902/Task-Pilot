@@ -8,7 +8,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from google.auth.transport.requests import Request as GoogleRequest
 from google.oauth2 import id_token
 from google.oauth2.credentials import Credentials
@@ -28,6 +28,13 @@ from app.assignments import Assignment
 from app.study_planner import plan_sessions, progress, unschedulable
 from app.reminders import create_mailer, ReminderService
 from app.calendar_export import to_csv, to_ics
+from app.calendar_provider import (
+    GOOGLE,
+    NATIVE,
+    PROVIDER_LABELS,
+    GoogleCalendarProvider,
+    NativeCalendarProvider,
+)
 
 COOKIE = 'task_pilot_session'
 CALENDAR_EVENT_SCOPE = 'https://www.googleapis.com/auth/calendar.events'
@@ -70,13 +77,52 @@ class UserRuntime:
                 self.store.save_user(user_id, profile, json.loads(creds.to_json()))
         return build('calendar', 'v3', credentials=creds, cache_discovery=False)
 
+    def active_provider_name(self, user_id):
+        """Resolve which calendar this workspace uses. Server-side only.
+
+        The browser never gets a say: it may ask to switch, but the stored
+        choice and the stored credentials decide. An account with no explicit
+        choice uses Google when it is connected, and the native calendar
+        otherwise.
+        """
+        return self.store.active_calendar(user_id)
+
+    def provider(self, user_id, name=None):
+        """Build the active calendar provider for this workspace.
+
+        When Google is the active calendar and its credentials are missing or
+        expired, this raises. It never quietly hands back the native calendar:
+        a silent downgrade would write the user's events somewhere they did not
+        ask for and did not expect to find them.
+        """
+        name = name or self.active_provider_name(user_id)
+        if name == NATIVE:
+            return NativeCalendarProvider(self.store, user_id)
+        return GoogleCalendarProvider(self.service(user_id))
+
     def chat(self, user_id, thread_id, message):
         with self.store.lock('conversation', thread_id):
             saved, interrupted = self.store.conversation(user_id, thread_id, create=True)
             if interrupted:
                 raise HTTPException(409, 'The previous request was interrupted. Check your calendar and start a new conversation before making more changes.')
             self.store.name_conversation(user_id, thread_id, message)
-            service = self.service(user_id)
+            provider_name = self.active_provider_name(user_id)
+            # A pending confirmation belongs to the calendar it was planned
+            # against. If the active calendar changed while it was waiting,
+            # answering "yes" must not execute it somewhere else, so the stale
+            # plan is dropped and the user is told why.
+            if saved and saved.get('awaiting_confirmation'):
+                planned_on = saved.get('provider')
+                if planned_on and planned_on != provider_name:
+                    self.store.save_conversation(user_id, thread_id, {}, busy=False)
+                    raise HTTPException(
+                        409,
+                        'Your calendar changed while that action was waiting for '
+                        f'confirmation. It was prepared for {PROVIDER_LABELS.get(planned_on, planned_on)} '
+                        f'but you are now using {PROVIDER_LABELS.get(provider_name, provider_name)}. '
+                        'Nothing was changed — please ask again.',
+                    )
+            service = self.provider(user_id, provider_name)
             try:
                 chat = CalendarConversation(BudgetedModel(self.model_factory, self.store, user_id), service,
                                             preferences=self.store.preferences(user_id))
@@ -86,6 +132,7 @@ class UserRuntime:
                 # A crash must never lead to automatically replaying a calendar write.
                 self.store.save_conversation(user_id, thread_id, busy=True)
                 result = chat.ask(message, thread_id=thread_id)
+                result['provider'] = provider_name
                 serial = dict(result, messages=messages_to_dict(result.get('messages', [])))
                 self.store.save_conversation(user_id, thread_id, serial)
                 return result
@@ -166,8 +213,74 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
     @app.get('/auth/me')
     def me(request: Request):
         user_id = store.session_user(request.cookies.get(COOKIE, ''))
-        return {'authenticated':bool(user_id), 'user':store.user(user_id)[0] if user_id else None,
-                'login_configured':oauth_file.exists()}
+        payload = {'authenticated': bool(user_id),
+                   'user': store.user(user_id)[0] if user_id else None,
+                   'login_configured': oauth_file.exists()}
+        if user_id:
+            payload.update(_calendar_status(user_id))
+        return payload
+
+    def _reconnect_hint(provider):
+        if provider.name == GOOGLE:
+            return 'Try reconnecting your Google account, or switch to the Task Pilot calendar.'
+        return 'Please try again.'
+
+    def _calendar_status(user_id):
+        """What calendar this workspace is on, and what else it could use."""
+        connected = store.google_connected(user_id)
+        active = store.active_calendar(user_id)
+        return {
+            'guest': store.is_guest(user_id),
+            'google_connected': connected,
+            'active_provider': active,
+            'active_provider_label': PROVIDER_LABELS.get(active, active),
+            'available_providers': (
+                [{'name': GOOGLE, 'label': PROVIDER_LABELS[GOOGLE], 'ready': connected}]
+                if oauth_file.exists() or connected else []
+            ) + [{'name': NATIVE, 'label': PROVIDER_LABELS[NATIVE], 'ready': True}],
+        }
+
+    @app.post('/auth/guest')
+    def start_guest(request: Request):
+        """Open a workspace with no Google account behind it.
+
+        The identity is a fresh opaque server-issued session; nothing the
+        browser sends decides who the guest is. Each guest gets its own
+        workspace rather than a shared anonymous account.
+        """
+        existing = store.session_user(request.cookies.get(COOKIE, ''))
+        if existing:
+            # Already signed in: keep that workspace rather than stranding its
+            # data behind a brand new guest identity.
+            return JSONResponse({'success': True, **_calendar_status(existing)})
+        user_id = store.create_guest()
+        response = JSONResponse({'success': True, **_calendar_status(user_id)})
+        response.set_cookie(
+            COOKIE, store.session(user_id, session_max_age), max_age=session_max_age,
+            httponly=True, secure=secure, samesite='lax', path='/',
+        )
+        return response
+
+    @app.get('/calendar/status')
+    def calendar_status(user_id=Depends(current_user)):
+        return _calendar_status(user_id)
+
+    @app.put('/calendar/provider')
+    def choose_calendar(provider: str = Query(...), user_id=Depends(current_user)):
+        """Switch this workspace between the available calendars.
+
+        Choosing Google without a connected account is refused rather than
+        silently honoured, so the UI cannot leave someone pointed at a calendar
+        that cannot answer.
+        """
+        if provider not in {GOOGLE, NATIVE}:
+            raise HTTPException(422, 'Unknown calendar.')
+        if provider == GOOGLE and not store.google_connected(user_id):
+            raise HTTPException(
+                409, 'Connect your Google account before switching to Google Calendar.'
+            )
+        store.set_calendar_provider(user_id, provider)
+        return _calendar_status(user_id)
 
     @app.get('/auth/login')
     def login(request: Request):
@@ -313,16 +426,17 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
         that plans against an empty week and says so, so failures here degrade
         to "no known commitments" rather than a 502.
         """
-        service = runtime.service(user_id)
+        provider = None
         try:
+            provider = runtime.provider(user_id)
             now = local_now()
-            result = get_events(service, 250, now, now + timedelta(days=days + 1))
+            result = provider.list_events(250, now, now + timedelta(days=days + 1))
             return result.get('events', []) if result.get('success') else []
         except Exception:
             return []
         finally:
-            if hasattr(service, 'close'):
-                service.close()
+            if provider is not None:
+                provider.close()
 
     @app.get('/study/plan')
     def study_plan(user_id=Depends(current_user)):
@@ -388,15 +502,18 @@ def create_multiuser_app(store=None, runtime=None, *, origin=None, oauth_file=No
                 raise ValueError('time_max must be after time_min')
         except ValueError:
             raise HTTPException(422, 'Invalid calendar time range') from None
-        service = runtime.service(user_id)
+        provider = runtime.provider(user_id)
         try:
-            result = get_events(service,max_results,start,end)
+            result = provider.list_events(max_results, start, end)
             if not result.get('success'):
-                raise HTTPException(502, 'Could not read your Google Calendar. Try reconnecting your account.')
+                # Name the calendar that failed. Reporting a Google problem
+                # while the user is on the native calendar is worse than
+                # useless, and a failure is never answered with the other
+                # calendar's events.
+                raise HTTPException(502, f'Could not read your {provider.label}. {_reconnect_hint(provider)}')
             return result
         finally:
-            if hasattr(service,'close'):
-                service.close()
+            provider.close()
     @app.post('/internal/reminders', include_in_schema=False)
     def scheduled_reminders(request: Request):
         secret = os.getenv('REMINDER_TRIGGER_SECRET', '')
