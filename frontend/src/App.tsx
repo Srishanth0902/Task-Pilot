@@ -43,22 +43,46 @@ type Message = {
   text: string;
   payload?: ChatResponse;
 };
-type UserAccount = {id:string;name:string;email:string;picture?:string|null};
+type UserAccount = {id:string;name:string;email:string;picture?:string|null;kind?:string};
+export type CalendarStatus = {
+  guest: boolean;
+  google_connected: boolean;
+  active_provider: "google" | "native";
+  active_provider_label: string;
+  available_providers: {name: "google" | "native"; label: string; ready: boolean}[];
+};
 export default function App() {
   const client = useQueryClient();
   const auth = useQuery({queryKey: ['auth'], queryFn: () => request<{authenticated:boolean; login_configured:boolean; user:UserAccount|null}>('/auth/me'), retry:false});
+  const startGuest = async () => {
+    await request('/auth/guest', {method: 'POST'});
+    client.clear();
+    await auth.refetch();
+  };
   if (!auth.data?.authenticated || !auth.data.user) return <main className="auth-shell">
     <section className="auth-card">
       <span className="auth-mark"><CalendarDays size={24}/></span>
       <div>
         <h1>Task Pilot</h1>
-        <p className="auth-summary">Plan, move, and protect time on your Google Calendar.</p>
+        <p className="auth-summary">Plan, move, and protect your time — with or without Google Calendar.</p>
       </div>
       {auth.isPending ? <div className="auth-status" role="status">Loading your account…</div> : auth.isError ? <div className="auth-status error" role="alert">Could not connect. <button className="text-button" onClick={()=>auth.refetch()}>Try again</button></div> : <>
-        <p>Sign in to manage your calendar and continue your saved conversations.</p>
-        {auth.data?.login_configured ? <a className="auth-action" href="/api/auth/login"><UserRound size={17}/> Continue with Google</a> : <div className="auth-status">Google sign-in is being configured. Please check back shortly.</div>}
+        <p>Choose how you want to keep your schedule.</p>
+        <div className="auth-choices">
+          {auth.data?.login_configured
+            ? <a className="auth-action" href="/api/auth/login"><UserRound size={17}/> Connect Google Calendar</a>
+            : <div className="auth-status">Google sign-in is being configured. Please check back shortly.</div>}
+          <button className="auth-action secondary" onClick={startGuest}>
+            <CalendarDays size={17}/> Use app’s native calendar
+          </button>
+        </div>
+        <small className="auth-note">
+          The native calendar keeps your events inside Task Pilot. It needs no Google
+          account, and nothing is sent to Google. Your workspace is tied to this browser,
+          so clearing cookies will lose access to it — connect Google to reach the same
+          schedule from another device.
+        </small>
       </>}
-      <small>Your calendar data stays connected to the Google account you choose.</small>
       <small>AI requests send your message and relevant calendar context to OpenRouter and its model provider. Do not enter sensitive information you do not want processed by these services.</small>
       <small><a href="/privacy/">Privacy policy</a> · <a href="/terms/">Terms of use</a> · <a href="mailto:netflixchill3007@gmail.com">Contact support</a></small>
     </section>
@@ -115,10 +139,34 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
     queryKey: ["health"],
     queryFn: () => request<Health>("/health"),
   });
+  const calendar = useQuery({
+    queryKey: ["calendar-status", user.id],
+    queryFn: () => request<CalendarStatus>("/calendar/status"),
+  });
+  const activeProvider = calendar.data?.active_provider;
+  const switchCalendar = async (name: "google" | "native") => {
+    setError("");
+    try {
+      await request(`/calendar/provider?provider=${name}`, {method: "PUT"});
+      // Drop every cached calendar answer: results from the previous calendar
+      // must not survive the switch.
+      client.removeQueries({queryKey: ["events"]});
+      setMessages([]);
+      setPending(false);
+      setThread(crypto.randomUUID());
+      await calendar.refetch();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not switch calendars.");
+    }
+  };
   const events = useQuery({
-    queryKey: ["events", user.id, day, view],
+    // Deliberately not gated on the calendar-status query. Blocking the
+    // schedule until that call returns would blank the whole view whenever it
+    // is slow or briefly fails; the server decides the calendar either way and
+    // stamps the answer with it, so a mismatch is caught below instead.
+    queryKey: ["events", user.id, day, view, activeProvider],
     queryFn: () =>
-      request<{ success: boolean; events: CalendarEvent[]; count: number }>(
+      request<{ success: boolean; events: CalendarEvent[]; count: number; provider?: string }>(
         (() => {
         const from = view === "month" ? monthGrid(day)[0] : day;
         const span = view === "month" ? 42 : view === "week" ? 7 : 1;
@@ -126,7 +174,14 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
       })(),
       ),
   });
-  const rows = (events.data?.events || [])
+  // Drop a payload that came from a calendar the user has since left. The
+  // server stamps every answer with the calendar that produced it, so stale
+  // results from the previous provider can be recognised and discarded rather
+  // than shown under the new calendar's name.
+  const staleProvider = Boolean(
+    activeProvider && events.data?.provider && events.data.provider !== activeProvider,
+  );
+  const rows = (staleProvider ? [] : events.data?.events || [])
     .slice()
     .sort((a, b) => a.start.localeCompare(b.start));
   useEffect(() => {
@@ -285,9 +340,36 @@ function AuthenticatedApp({user,logout,switchAccount}:{user:UserAccount;logout:(
             <span className={`status-dot ${events.isSuccess ? "connected" : ""}`}/>
             <span>
               {events.isSuccess ? "Calendar connected" : events.isError ? "Calendar unavailable" : "Connecting to calendar"}
-              <small>Google Calendar / IST</small>
+              <small>{calendar.data?.active_provider_label || "Calendar"} / IST</small>
             </span>
           </div>
+          {calendar.data && calendar.data.available_providers.length > 1 && (
+            <div className="calendar-switch">
+              <span className="calendar-switch-label">Using</span>
+              {calendar.data.available_providers.map((option) => (
+                <button
+                  key={option.name}
+                  className={option.name === activeProvider ? "selected" : ""}
+                  aria-pressed={option.name === activeProvider}
+                  disabled={!option.ready || busy}
+                  title={option.ready ? `Switch to ${option.label}`
+                                      : "Connect your Google account to use this"}
+                  onClick={() => option.name !== activeProvider && switchCalendar(option.name)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
+          {calendar.data?.guest && (
+            <p className="guest-note">
+              Guest workspace. Your schedule lives in this browser — clearing cookies
+              loses access.{" "}
+              {calendar.data.available_providers.some((o) => o.name === "google") && (
+                <a href="/api/auth/login">Connect Google</a>
+              )}
+            </p>
+          )}
         </div>
       </aside>
       <header className="topbar">

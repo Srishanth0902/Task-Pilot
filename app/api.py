@@ -86,6 +86,7 @@ class ChatResponse(BaseModel):
     alternatives: list[dict[str, Any]] = Field(default_factory=list)
     tool_result: dict[str, Any] | None = None
     error: str | None = None
+    provider: str | None = None
 
 
 class EventsResponse(BaseModel):
@@ -93,6 +94,9 @@ class EventsResponse(BaseModel):
     count: int = 0
     events: list[dict[str, Any]] = Field(default_factory=list)
     error: str | None = None
+    # Which calendar these events came from. The UI shows it, and uses it to
+    # drop results that arrived from a calendar the user has since left.
+    provider: str | None = None
 
 
 class AgentRuntime:
@@ -182,6 +186,7 @@ def _chat_response(state: dict, thread_id: str) -> ChatResponse:
         alternatives=state.get("alternatives", []),
         tool_result=tool_result,
         error=error,
+        provider=state.get("provider"),
     )
 
 

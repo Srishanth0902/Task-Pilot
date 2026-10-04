@@ -1,16 +1,14 @@
-"""LangChain tools backed by the structured Google Calendar service."""
+"""LangChain tools backed by whichever calendar provider is active.
+
+The tools call the provider interface rather than Google directly, so the same
+five tools drive Google Calendar and the native calendar with no branching and
+no duplicated agent logic.
+"""
 
 from datetime import datetime
 
 from langchain_core.tools import StructuredTool
 
-from app.calendar_service import (
-    create_event,
-    delete_event,
-    get_events,
-    search_events,
-    update_event,
-)
 from app.schemas import (
     CreateEventInput,
     DeleteEventInput,
@@ -20,12 +18,17 @@ from app.schemas import (
 )
 
 
-def build_calendar_tools(service):
-    """Bind an authenticated (or fake) service to five LangChain tools.
+def build_calendar_tools(provider):
+    """Bind a calendar provider to five LangChain tools.
 
-    Dependency injection keeps OAuth out of module import and makes the exact
-    same tools usable with a fake Calendar client in offline tests.
+    Dependency injection keeps OAuth out of module import, lets the same tools
+    run against a fake client in offline tests, and is what allows the native
+    calendar to reuse the agent unchanged.
+
+    A bare Google service object is still accepted so older callers and tests
+    keep working; it is wrapped in the Google provider.
     """
+    provider = as_provider(provider)
 
     def create_calendar_event(
         title: str,
@@ -42,8 +45,7 @@ def build_calendar_tools(service):
             description=description,
             location=location,
         )
-        return create_event(
-            service,
+        return provider.create_event(
             summary=values.title,
             start=values.start_time,
             end=values.end_time,
@@ -57,8 +59,7 @@ def build_calendar_tools(service):
         time_max: datetime | None = None,
     ) -> dict:
         """List upcoming calendar events in chronological order."""
-        return get_events(
-            service,
+        return provider.list_events(
             max_results=max_results,
             time_min=time_min,
             time_max=time_max,
@@ -71,8 +72,7 @@ def build_calendar_tools(service):
         time_max: datetime | None = None,
     ) -> dict:
         """Find calendar events whose text matches a query."""
-        return search_events(
-            service,
+        return provider.search_events(
             query=query,
             max_results=max_results,
             time_min=time_min,
@@ -88,8 +88,7 @@ def build_calendar_tools(service):
         location: str | None = None,
     ) -> dict:
         """Change selected fields on an existing calendar event."""
-        return update_event(
-            service,
+        return provider.update_event(
             event_id=event_id,
             summary=title,
             start=start_time,
@@ -100,7 +99,7 @@ def build_calendar_tools(service):
 
     def delete_calendar_event(event_id: str) -> dict:
         """Delete a calendar event by its event id."""
-        return delete_event(service, event_id=event_id)
+        return provider.delete_event(event_id=event_id)
 
     return [
         StructuredTool.from_function(
@@ -129,3 +128,17 @@ def build_calendar_tools(service):
             args_schema=DeleteEventInput,
         ),
     ]
+
+
+def as_provider(candidate):
+    """Accept a provider, or wrap a raw Google service in one.
+
+    Existing callers and a large body of tests pass the Google client directly.
+    Rather than rewrite every one of them, anything that is not already a
+    provider is treated as a Google service.
+    """
+    from app.calendar_provider import CalendarProvider, GoogleCalendarProvider
+
+    if isinstance(candidate, CalendarProvider):
+        return candidate
+    return GoogleCalendarProvider(candidate)

@@ -3,14 +3,16 @@ import {test,expect} from '@playwright/test';
 test('signed-out visitor sees Google login and does not fetch events',async({page})=>{
   let eventRequests=0;
   await page.route('**/api/auth/me',route=>route.fulfill({json:{authenticated:false,login_configured:true,user:null}}));
+  await page.route('**/api/calendar/status',route=>route.fulfill({json:{guest:false,google_connected:true,active_provider:'google',active_provider_label:'Google Calendar',available_providers:[{name:'google',label:'Google Calendar',ready:true},{name:'native',label:'Task Pilot calendar',ready:true}]}}));
   await page.route('**/api/events?*',route=>{eventRequests++;return route.fulfill({json:{events:[]}});});
   await page.goto('/');
-  await expect(page.getByRole('link',{name:'Continue with Google'})).toHaveAttribute('href','/api/auth/login');
+  await expect(page.getByRole('link',{name:'Connect Google Calendar'})).toHaveAttribute('href','/api/auth/login');
   expect(eventRequests).toBe(0);
 });
 
 test('signed-in user can sign out or switch Google accounts',async({page})=>{
   await page.route('**/api/auth/me',route=>route.fulfill({json:{authenticated:true,login_configured:true,user:{id:'alice',name:'Alice',email:'alice@example.com'}}}));
+  await page.route('**/api/calendar/status',route=>route.fulfill({json:{guest:false,google_connected:true,active_provider:'google',active_provider_label:'Google Calendar',available_providers:[{name:'google',label:'Google Calendar',ready:true},{name:'native',label:'Task Pilot calendar',ready:true}]}}));
   await page.route('**/api/events?*',route=>route.fulfill({json:{success:true,events:[]}}));
   await page.route('**/api/health',route=>route.fulfill({json:{status:'ok',timezone:'Asia/Kolkata'}}));
   await page.route('**/api/conversations',route=>route.fulfill({json:[]}));
@@ -25,6 +27,7 @@ test('signed-in user can sign out or switch Google accounts',async({page})=>{
 
 test('saved confirmation can be reopened after page reload',async({page})=>{
   await page.route('**/api/auth/me',route=>route.fulfill({json:{authenticated:true,user:{id:'alice',email:'alice@example.com',name:'Alice'}}}));
+  await page.route('**/api/calendar/status',route=>route.fulfill({json:{guest:false,google_connected:true,active_provider:'google',active_provider_label:'Google Calendar',available_providers:[{name:'google',label:'Google Calendar',ready:true},{name:'native',label:'Task Pilot calendar',ready:true}]}}));
   await page.route('**/api/events?*',route=>route.fulfill({json:{events:[]}}));
   await page.route('**/api/health',route=>route.fulfill({json:{status:'ok',timezone:'Asia/Kolkata'}}));
   await page.route('**/api/conversations',route=>route.fulfill({json:[{id:'saved',title:'Delete Yoga',updated:1700000000}]}));

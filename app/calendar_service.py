@@ -193,6 +193,7 @@ def update_event(
     end=None,
     description=None,
     location=None,
+    if_match=None,
 ):
     """Update selected fields and return a stable structured result.
 
@@ -202,6 +203,9 @@ def update_event(
 
     Raises ``ValueError`` if no fields were given, which otherwise turns into a
     confusing no-op API call.
+
+    ``if_match`` sends the event's etag as a precondition, so a write loses
+    rather than silently overwriting an edit made since the event was read.
     """
     body = {}
     if summary is not None:
@@ -219,21 +223,29 @@ def update_event(
         raise ValueError("update_event() needs at least one field to change.")
 
     try:
-        event = (
-            service.events()
-            .patch(calendarId=CALENDAR_ID, eventId=event_id, body=body)
-            .execute()
+        request = service.events().patch(
+            calendarId=CALENDAR_ID, eventId=event_id, body=body
         )
+        if if_match:
+            request.headers["If-Match"] = if_match
+        event = request.execute()
     except HttpError as error:
         return _failure(error)
 
     return {"success": True, **_normalise_event(event)}
 
 
-def delete_event(service, event_id):
-    """Delete by id and return an idempotent structured result."""
+def delete_event(service, event_id, if_match=None):
+    """Delete by id and return an idempotent structured result.
+
+    ``if_match`` sends the event's etag as a precondition, so a delete racing
+    an edit fails loudly instead of removing a changed event.
+    """
     try:
-        service.events().delete(calendarId=CALENDAR_ID, eventId=event_id).execute()
+        request = service.events().delete(calendarId=CALENDAR_ID, eventId=event_id)
+        if if_match:
+            request.headers["If-Match"] = if_match
+        request.execute()
     except HttpError as error:
         if error.resp.status in (404, 410):
             return {
