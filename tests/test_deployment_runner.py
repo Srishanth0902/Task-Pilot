@@ -10,6 +10,16 @@ from scripts import verify_deployment as runner
 
 
 class DeploymentRunnerTests(unittest.TestCase):
+    def test_restart_uses_new_ephemeral_host_port(self):
+        mapping = json.dumps([{'NetworkSettings': {'Ports': {
+            '8123/tcp': [{'HostPort': '45678'}]}}}])
+        with patch.object(runner, 'docker', side_effect=['container', mapping]) as docker, \
+                patch.object(runner, 'wait_ready') as ready:
+            self.assertEqual(runner.restart_container('owned-container'), 'http://127.0.0.1:45678')
+        self.assertEqual(docker.call_args_list[0].args, ('restart', 'owned-container'))
+        self.assertEqual(docker.call_args_list[1].args, ('inspect', 'owned-container'))
+        ready.assert_called_once_with('http://127.0.0.1:45678')
+
     def test_no_docker_is_unverified_not_a_pass(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(runner, 'ROOT', Path(directory)), \
                 patch.object(runner, 'docker', side_effect=RuntimeError('engine unavailable')) as docker, \

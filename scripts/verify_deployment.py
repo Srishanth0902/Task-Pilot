@@ -64,6 +64,20 @@ def wait_ready(origin, seconds=120, process=None):
     raise RuntimeError('Production image never became ready.')
 
 
+def container_origin(name):
+    port = json.loads(docker('inspect', name))[0]['NetworkSettings']['Ports']['8123/tcp'][0]['HostPort']
+    return 'http://127.0.0.1:' + port
+
+
+def restart_container(name):
+    docker('restart', name)
+    # Docker can allocate a different ephemeral host port on restart. Never
+    # probe the old mapping, which may now be closed or belong to another app.
+    origin = container_origin(name)
+    wait_ready(origin)
+    return origin
+
+
 def check_http(origin, public_origin):
     with requests.Session() as client:
         index = client.get(origin + '/', timeout=10)
@@ -263,8 +277,7 @@ def main():
                 '--memory', '512m', '--cpus', '0.1',
                 '--env-file', str(folder / 'run.env'), '--mount',
                 'type=bind,source=' + str(folder / 'credentials.web.json') + ',target=/etc/secrets/credentials.web.json,readonly', args.image)
-            port = json.loads(docker('inspect', app_name))[0]['NetworkSettings']['Ports']['8123/tcp'][0]['HostPort']
-            origin = 'http://127.0.0.1:' + port
+            origin = container_origin(app_name)
             wait_ready(origin)
             docker('exec', app_name, 'python', '-c',
                    'import os; assert os.getuid()==1000 and os.getgid()==1000')
@@ -274,8 +287,7 @@ def main():
             docker('exec', app_name, 'python', '-c',
                 "from app.storage import create_store; s=create_store(); s.save_user('smoke',{'email':'smoke@example.com'},{'refresh_token':'synthetic'}); "
                 "s.conversation('smoke','smoke-thread',create=True); s.name_conversation('smoke','smoke-thread','Persistent synthetic conversation')")
-            docker('restart', app_name)
-            wait_ready(origin)
+            origin = restart_container(app_name)
             docker('exec', app_name, 'python', '-c',
                 "from app.storage import create_store; s=create_store(); assert s.user('smoke')[1]['refresh_token']=='synthetic'; "
                 "assert s.conversations('smoke')[0]['title']=='Persistent synthetic conversation'")
